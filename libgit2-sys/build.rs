@@ -6,8 +6,8 @@ use std::process::Command;
 
 /// Tries to use system libgit2 and emits necessary build script instructions.
 fn try_system_libgit2() -> Result<pkg_config::Library, pkg_config::Error> {
-    let mut cfg = pkg_config::Config::new();
-    match cfg.range_version("1.7.1".."1.8.0").probe("libgit2") {
+    let cfg = pkg_config::Config::new();
+    match cfg.probe("libgit2") {
         Ok(lib) => {
             for include in &lib.include_paths {
                 println!("cargo:root={}", include.display());
@@ -59,7 +59,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
 
     if !Path::new("libgit2/src").exists() {
         let _ = Command::new("git")
-            .args(&["submodule", "update", "--init", "libgit2"])
+            .args(["submodule", "update", "--init", "libgit2"])
             .status();
     }
 
@@ -185,14 +185,25 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     if https {
         features.push_str("#define GIT_HTTPS 1\n");
 
-        if windows {
-            features.push_str("#define GIT_WINHTTP 1\n");
-        } else if target.contains("apple") {
-            features.push_str("#define GIT_SECURE_TRANSPORT 1\n");
-        } else {
+        #[cfg(feature = "use-openssl")]
+        {
             features.push_str("#define GIT_OPENSSL 1\n");
             if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
                 cfg.include(path);
+            }
+        }
+
+        #[cfg(not(feature = "use-openssl"))]
+        {
+            if windows {
+                features.push_str("#define GIT_WINHTTP 1\n");
+            } else if target.contains("apple") {
+                features.push_str("#define GIT_SECURE_TRANSPORT 1\n")
+            } else {
+                features.push_str("#define GIT_OPENSSL 1\n");
+                if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
+                    cfg.include(path);
+                }
             }
         }
     }
