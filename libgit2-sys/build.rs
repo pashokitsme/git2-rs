@@ -185,7 +185,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     if https {
         features.push_str("#define GIT_HTTPS 1\n");
 
-        #[cfg(feature = "use-openssl")]
+        #[cfg(feature = "openssl")]
         {
             features.push_str("#define GIT_OPENSSL 1\n");
             if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
@@ -193,17 +193,13 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             }
         }
 
-        #[cfg(not(feature = "use-openssl"))]
+        #[cfg(not(feature = "openssl"))]
         {
             if windows {
                 features.push_str("#define GIT_WINHTTP 1\n");
-            } else if target.contains("apple") {
+            }
+            if target.contains("apple") {
                 features.push_str("#define GIT_SECURE_TRANSPORT 1\n")
-            } else {
-                features.push_str("#define GIT_OPENSSL 1\n");
-                if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
-                    cfg.include(path);
-                }
             }
         }
     }
