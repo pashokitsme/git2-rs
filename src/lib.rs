@@ -740,7 +740,7 @@ fn init() {
     raw::init();
 }
 
-#[cfg(all(unix, not(target_os = "ios"), feature = "https"))]
+#[cfg(all(not(target_os = "ios"), feature = "https"))]
 fn openssl_env_init() {
     // Currently, libgit2 leverages OpenSSL for SSL support when cloning
     // repositories over HTTPS. This means that we're picking up an OpenSSL
@@ -853,16 +853,9 @@ fn openssl_env_init() {
     // OS X the OpenSSL binaries are stable enough that we can just rely on
     // dynamic linkage (plus they have some weird modifications to OpenSSL which
     // means we wouldn't want to link statically).
+    #[cfg(feature = "openssl")]
     openssl_probe::init_ssl_cert_env_vars();
 }
-
-// #[cfg(any(
-//     windows,
-//     target_os = "macos",
-//     target_os = "ios",
-//     not(feature = "https")
-// ))]
-// fn openssl_env_init() {}
 
 unsafe fn opt_bytes<'a, T>(_anchor: &'a T, c: *const libc::c_char) -> Option<&'a [u8]> {
     if c.is_null() {
