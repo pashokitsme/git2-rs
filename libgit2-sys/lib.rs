@@ -4288,13 +4288,13 @@ pub fn init() {
     });
 }
 
-#[cfg(all(unix, feature = "https"))]
+#[cfg(feature = "openssl")]
 #[doc(hidden)]
 pub fn openssl_init() {
     openssl_sys::init();
 }
 
-#[cfg(any(windows, not(feature = "https")))]
+#[cfg(not(feature = "openssl"))]
 #[doc(hidden)]
 pub fn openssl_init() {}
 
