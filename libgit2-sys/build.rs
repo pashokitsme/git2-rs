@@ -185,7 +185,12 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     if https {
         features.push_str("#define GIT_HTTPS 1\n");
 
-        if windows {
+        if cfg!(feature = "vendored-openssl") {
+            features.push_str("#define GIT_OPENSSL 1\n");
+            if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
+                cfg.include(path);
+            }
+        } else if windows {
             features.push_str("#define GIT_WINHTTP 1\n");
         } else if target.contains("apple") {
             features.push_str("#define GIT_SECURE_TRANSPORT 1\n");
@@ -207,7 +212,10 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     cfg.file("libgit2/src/util/hash/sha1dc/ubc_check.c");
 
     if https {
-        if windows {
+        if cfg!(feature = "vendored-openssl") {
+            features.push_str("#define GIT_SHA256_OPENSSL 1\n");
+            cfg.file("libgit2/src/util/hash/openssl.c");
+        } else if windows {
             features.push_str("#define GIT_SHA256_WIN32 1\n");
             cfg.file("libgit2/src/util/hash/win32.c");
         } else if target.contains("apple") {
