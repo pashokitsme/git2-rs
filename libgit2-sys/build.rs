@@ -194,11 +194,6 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             features.push_str("#define GIT_WINHTTP 1\n");
         } else if target.contains("apple") {
             features.push_str("#define GIT_SECURE_TRANSPORT 1\n");
-        } else {
-            features.push_str("#define GIT_OPENSSL 1\n");
-            if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
-                cfg.include(path);
-            }
         }
     }
 
@@ -221,9 +216,6 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         } else if target.contains("apple") {
             features.push_str("#define GIT_SHA256_COMMON_CRYPTO 1\n");
             cfg.file("libgit2/src/util/hash/common_crypto.c");
-        } else {
-            features.push_str("#define GIT_SHA256_OPENSSL 1\n");
-            cfg.file("libgit2/src/util/hash/openssl.c");
         }
     } else {
         features.push_str("#define GIT_SHA256_BUILTIN 1\n");
