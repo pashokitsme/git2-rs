@@ -223,6 +223,11 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         cfg.file("libgit2/src/util/hash/rfc6234/sha224-256.c");
     }
 
+    if target.contains("wasm") {
+        cfg.file("emscripten-transport/emscriptenhttp-async.c");
+        cfg.file("emscripten-transport/emscriptenhttp.c");
+    }
+
     if let Some(path) = env::var_os("DEP_Z_INCLUDE") {
         cfg.include(path);
     }

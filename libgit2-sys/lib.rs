@@ -2,6 +2,7 @@
 #![allow(non_camel_case_types, unused_extern_crates)]
 
 // This is required to link libz when libssh2-sys is not included.
+#[cfg(not(feature = "emscripten"))]
 extern crate libz_sys as libz;
 
 use libc::{c_char, c_int, c_uchar, c_uint, c_void, size_t};
