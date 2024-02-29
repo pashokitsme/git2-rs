@@ -223,11 +223,6 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         cfg.file("libgit2/src/util/hash/rfc6234/sha224-256.c");
     }
 
-    if target.contains("wasm") {
-        cfg.file("emscripten-transport/emscriptenhttp-async.c");
-        cfg.file("emscripten-transport/emscriptenhttp.c");
-    }
-
     if let Some(path) = env::var_os("DEP_Z_INCLUDE") {
         cfg.include(path);
     }
@@ -238,6 +233,12 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
 
     features.push_str("#endif\n");
     fs::write(include.join("git2_features.h"), features).unwrap();
+
+    if target.contains("wasm") {
+        cfg.include("libgit2/src/libgit2/transports");
+        cfg.file("emscripten-transport/emscriptenhttp-async.c");
+        cfg.file("emscripten-transport/emscriptenhttp.c");
+    }
 
     cfg.compile("git2");
 
