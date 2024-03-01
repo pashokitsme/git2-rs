@@ -62,6 +62,10 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             .args(&["submodule", "update", "--init", "libgit2"])
             .status();
     }
+    /*
+    sed -i '' 's/GIT_PACK_FILE_MODE 0444/GIT_PACK_FILE_MODE 0644/g' libgit2/src/libgit2/pack.h
+    sed -i '' 's/GIT_OBJECT_FILE_MODE 0444/GIT_OBJECT_FILE_MODE 0644/g' libgit2/src/libgit2/odb.h
+    */
 
     let target = env::var("TARGET").unwrap();
     let windows = target.contains("windows");
@@ -69,6 +73,30 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     let include = dst.join("include");
     let mut cfg = cc::Build::new();
     fs::create_dir_all(&include).unwrap();
+
+    if target.contains("wasm") {
+        replace_file_str(
+            "libgit2/src/libgit2/pack.h",
+            "GIT_PACK_FILE_MODE 0444",
+            "GIT_PACK_FILE_MODE 0644",
+        );
+        replace_file_str(
+            "libgit2/src/libgit2/odb.h",
+            "GIT_OBJECT_FILE_MODE 0444",
+            "GIT_OBJECT_FILE_MODE 0644",
+        );
+    } else {
+        replace_file_str(
+            "libgit2/src/libgit2/pack.h",
+            "GIT_PACK_FILE_MODE 0644",
+            "GIT_PACK_FILE_MODE 0444",
+        );
+        replace_file_str(
+            "libgit2/src/libgit2/odb.h",
+            "GIT_OBJECT_FILE_MODE 0644",
+            "GIT_OBJECT_FILE_MODE 0444",
+        );
+    }
 
     // Copy over all header files
     cp_r("libgit2/include", &include);
@@ -269,6 +297,11 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     println!("cargo:rerun-if-changed=libgit2/include");
     println!("cargo:rerun-if-changed=libgit2/src");
     println!("cargo:rerun-if-changed=libgit2/deps");
+}
+
+fn replace_file_str(path: impl AsRef<Path>, from: &str, to: &str) {
+    let content = fs::read_to_string(&path).unwrap();
+    fs::write(path, content.replace(from, to)).unwrap();
 }
 
 fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
