@@ -80,14 +80,22 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         .warnings(false);
 
     // Include all cross-platform C files
-    add_c_files(&mut cfg, "libgit2/src/libgit2");
-    add_c_files(&mut cfg, "libgit2/src/util");
+    add_c_files(&mut cfg, "libgit2/src/libgit2", vec![]);
+    add_c_files(&mut cfg, "libgit2/src/util", vec![]);
 
     // These are activated by features, but they're all unconditionally always
     // compiled apparently and have internal #define's to make sure they're
     // compiled correctly.
-    add_c_files(&mut cfg, "libgit2/src/libgit2/transports");
-    add_c_files(&mut cfg, "libgit2/src/libgit2/streams");
+    add_c_files(
+        &mut cfg,
+        "libgit2/src/libgit2/transports",
+        if target.contains("wasm") {
+            vec!["http.c".into()]
+        } else {
+            vec![]
+        },
+    );
+    add_c_files(&mut cfg, "libgit2/src/libgit2/streams", vec![]);
 
     // Always use bundled http-parser for now
     cfg.include("libgit2/deps/http-parser")
@@ -95,7 +103,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
 
     // external/system xdiff is not yet supported
     cfg.include("libgit2/deps/xdiff");
-    add_c_files(&mut cfg, "libgit2/deps/xdiff");
+    add_c_files(&mut cfg, "libgit2/deps/xdiff", vec![]);
 
     // Use the included PCRE regex backend.
     //
@@ -118,13 +126,19 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         .define("MAX_NAME_COUNT", Some("10000"));
     // "no symbols" warning on pcre_string_utils.c is because it is only used
     // when when COMPILE_PCRE8 is not defined, which is the default.
-    add_c_files(&mut cfg, "libgit2/deps/pcre");
+    add_c_files(&mut cfg, "libgit2/deps/pcre", vec![]);
 
     cfg.file("libgit2/src/util/allocators/failalloc.c");
     cfg.file("libgit2/src/util/allocators/stdalloc.c");
 
+    if target.contains("wasm") {
+        cfg.include("libgit2/src/libgit2/transports");
+        cfg.file("emscripten-transport/emscriptenhttp-async.c");
+        cfg.file("emscripten-transport/emscriptenhttp.c");
+    }
+
     if windows {
-        add_c_files(&mut cfg, "libgit2/src/util/win32");
+        add_c_files(&mut cfg, "libgit2/src/util/win32", vec![]);
         cfg.define("STRSAFE_NO_DEPRECATE", None);
         cfg.define("WIN32", None);
         cfg.define("_WIN32_WINNT", Some("0x0600"));
@@ -136,7 +150,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             cfg.define("__USE_MINGW_ANSI_STDIO", "1");
         }
     } else {
-        add_c_files(&mut cfg, "libgit2/src/util/unix");
+        add_c_files(&mut cfg, "libgit2/src/util/unix", vec![]);
         cfg.flag("-fvisibility=hidden");
     }
     if target.contains("solaris") || target.contains("illumos") {
@@ -234,12 +248,6 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     features.push_str("#endif\n");
     fs::write(include.join("git2_features.h"), features).unwrap();
 
-    if target.contains("wasm") {
-        cfg.include("libgit2/src/libgit2/transports");
-        cfg.file("emscripten-transport/emscriptenhttp-async.c");
-        cfg.file("emscripten-transport/emscriptenhttp.c");
-    }
-
     cfg.compile("git2");
 
     println!("cargo:root={}", dst.display());
@@ -278,7 +286,7 @@ fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     }
 }
 
-fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
+fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>, exclude: Vec<String>) {
     let path = path.as_ref();
     if !path.exists() {
         panic!("Path {} does not exist", path.display());
@@ -286,6 +294,11 @@ fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
     // sort the C files to ensure a deterministic build for reproducible builds
     let dir = path.read_dir().unwrap();
     let mut paths = dir.collect::<io::Result<Vec<_>>>().unwrap();
+    paths.retain(|p| {
+        !exclude
+            .iter()
+            .any(|e| p.path().as_path().file_name().unwrap().to_str().unwrap() == e)
+    });
     paths.sort_by_key(|e| e.path());
 
     for e in paths {
