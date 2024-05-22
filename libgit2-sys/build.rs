@@ -128,7 +128,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
 
     // Always use bundled HTTP parser (llhttp) for now
     cfg.include("libgit2/deps/llhttp");
-    add_c_files(&mut cfg, "libgit2/deps/llhttp");
+    add_c_files(&mut cfg, "libgit2/deps/llhttp", vec![]);
 
     // external/system xdiff is not yet supported
     cfg.include("libgit2/deps/xdiff");
