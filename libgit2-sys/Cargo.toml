@@ -8,11 +8,11 @@ repository = "https://github.com/rust-lang/git2-rs"
 license = "MIT OR Apache-2.0"
 description = "Native bindings to the libgit2 library"
 exclude = [
-    "libgit2/ci/*",
-    "libgit2/docs/*",
-    "libgit2/examples/*",
-    "libgit2/fuzzers/*",
-    "libgit2/tests/*",
+  "libgit2/ci/*",
+  "libgit2/docs/*",
+  "libgit2/examples/*",
+  "libgit2/fuzzers/*",
+  "libgit2/tests/*",
 ]
 edition = "2018"
 
@@ -23,6 +23,8 @@ path = "lib.rs"
 [dependencies]
 libc = "0.2"
 libssh2-sys = { version = "0.3.0", optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 libz-sys = { version = "1.1.0", default-features = false, features = ["libc"] }
 
 [build-dependencies]

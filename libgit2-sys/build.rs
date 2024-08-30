@@ -62,6 +62,10 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             .args(&["submodule", "update", "--init", "libgit2"])
             .status();
     }
+    /*
+    sed -i '' 's/GIT_PACK_FILE_MODE 0444/GIT_PACK_FILE_MODE 0644/g' libgit2/src/libgit2/pack.h
+    sed -i '' 's/GIT_OBJECT_FILE_MODE 0444/GIT_OBJECT_FILE_MODE 0644/g' libgit2/src/libgit2/odb.h
+    */
 
     let target = env::var("TARGET").unwrap();
     let windows = target.contains("windows");
@@ -69,6 +73,31 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     let include = dst.join("include");
     let mut cfg = cc::Build::new();
     fs::create_dir_all(&include).unwrap();
+
+    if target.contains("wasm") {
+        cfg.flag("-matomics").flag("-mbulk-memory");
+        replace_file_str(
+            "libgit2/src/libgit2/pack.h",
+            "GIT_PACK_FILE_MODE 0444",
+            "GIT_PACK_FILE_MODE 0644",
+        );
+        replace_file_str(
+            "libgit2/src/libgit2/odb.h",
+            "GIT_OBJECT_FILE_MODE 0444",
+            "GIT_OBJECT_FILE_MODE 0644",
+        );
+    } else {
+        replace_file_str(
+            "libgit2/src/libgit2/pack.h",
+            "GIT_PACK_FILE_MODE 0644",
+            "GIT_PACK_FILE_MODE 0444",
+        );
+        replace_file_str(
+            "libgit2/src/libgit2/odb.h",
+            "GIT_OBJECT_FILE_MODE 0644",
+            "GIT_OBJECT_FILE_MODE 0444",
+        );
+    }
 
     // Copy over all header files
     cp_r("libgit2/include", &include);
@@ -80,22 +109,30 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         .warnings(false);
 
     // Include all cross-platform C files
-    add_c_files(&mut cfg, "libgit2/src/libgit2");
-    add_c_files(&mut cfg, "libgit2/src/util");
+    add_c_files(&mut cfg, "libgit2/src/libgit2", vec![]);
+    add_c_files(&mut cfg, "libgit2/src/util", vec![]);
 
     // These are activated by features, but they're all unconditionally always
     // compiled apparently and have internal #define's to make sure they're
     // compiled correctly.
-    add_c_files(&mut cfg, "libgit2/src/libgit2/transports");
-    add_c_files(&mut cfg, "libgit2/src/libgit2/streams");
+    add_c_files(
+        &mut cfg,
+        "libgit2/src/libgit2/transports",
+        if target.contains("wasm") {
+            vec!["http.c".into()]
+        } else {
+            vec![]
+        },
+    );
+    add_c_files(&mut cfg, "libgit2/src/libgit2/streams", vec![]);
 
     // Always use bundled HTTP parser (llhttp) for now
     cfg.include("libgit2/deps/llhttp");
-    add_c_files(&mut cfg, "libgit2/deps/llhttp");
+    add_c_files(&mut cfg, "libgit2/deps/llhttp", vec![]);
 
     // external/system xdiff is not yet supported
     cfg.include("libgit2/deps/xdiff");
-    add_c_files(&mut cfg, "libgit2/deps/xdiff");
+    add_c_files(&mut cfg, "libgit2/deps/xdiff", vec![]);
 
     // Use the included PCRE regex backend.
     //
@@ -118,13 +155,18 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         .define("MAX_NAME_COUNT", Some("10000"));
     // "no symbols" warning on pcre_string_utils.c is because it is only used
     // when when COMPILE_PCRE8 is not defined, which is the default.
-    add_c_files(&mut cfg, "libgit2/deps/pcre");
+    add_c_files(&mut cfg, "libgit2/deps/pcre", vec![]);
 
     cfg.file("libgit2/src/util/allocators/failalloc.c");
     cfg.file("libgit2/src/util/allocators/stdalloc.c");
 
+    if target.contains("wasm") {
+        cfg.include("libgit2/src/libgit2/transports");
+        cfg.file("emscripten-transport/emscriptenhttp.c");
+    }
+
     if windows {
-        add_c_files(&mut cfg, "libgit2/src/util/win32");
+        add_c_files(&mut cfg, "libgit2/src/util/win32", vec![]);
         cfg.define("STRSAFE_NO_DEPRECATE", None);
         cfg.define("WIN32", None);
         cfg.define("_WIN32_WINNT", Some("0x0600"));
@@ -136,7 +178,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
             cfg.define("__USE_MINGW_ANSI_STDIO", "1");
         }
     } else {
-        add_c_files(&mut cfg, "libgit2/src/util/unix");
+        add_c_files(&mut cfg, "libgit2/src/util/unix", vec![]);
         cfg.flag("-fvisibility=hidden");
     }
     if target.contains("solaris") || target.contains("illumos") {
@@ -187,15 +229,15 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     if https {
         features.push_str("#define GIT_HTTPS 1\n");
 
-        if windows {
-            features.push_str("#define GIT_WINHTTP 1\n");
-        } else if target.contains("apple") {
-            features.push_str("#define GIT_SECURE_TRANSPORT 1\n");
-        } else {
+        if cfg!(feature = "vendored-openssl") {
             features.push_str("#define GIT_OPENSSL 1\n");
             if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
                 cfg.include(path);
             }
+        } else if windows {
+            features.push_str("#define GIT_WINHTTP 1\n");
+        } else if target.contains("apple") {
+            features.push_str("#define GIT_SECURE_TRANSPORT 1\n");
         }
     }
 
@@ -209,15 +251,15 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     cfg.file("libgit2/src/util/hash/sha1dc/ubc_check.c");
 
     if https {
-        if windows {
+        if cfg!(feature = "vendored-openssl") {
+            features.push_str("#define GIT_SHA256_OPENSSL 1\n");
+            cfg.file("libgit2/src/util/hash/openssl.c");
+        } else if windows {
             features.push_str("#define GIT_SHA256_WIN32 1\n");
             cfg.file("libgit2/src/util/hash/win32.c");
         } else if target.contains("apple") {
             features.push_str("#define GIT_SHA256_COMMON_CRYPTO 1\n");
             cfg.file("libgit2/src/util/hash/common_crypto.c");
-        } else {
-            features.push_str("#define GIT_SHA256_OPENSSL 1\n");
-            cfg.file("libgit2/src/util/hash/openssl.c");
         }
     } else {
         features.push_str("#define GIT_SHA256_BUILTIN 1\n");
@@ -259,6 +301,11 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     println!("cargo:rerun-if-changed=libgit2/deps");
 }
 
+fn replace_file_str(path: impl AsRef<Path>, from: &str, to: &str) {
+    let content = fs::read_to_string(&path).unwrap();
+    fs::write(path, content.replace(from, to)).unwrap();
+}
+
 fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     for e in from.as_ref().read_dir().unwrap() {
         let e = e.unwrap();
@@ -274,7 +321,7 @@ fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     }
 }
 
-fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
+fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>, exclude: Vec<String>) {
     let path = path.as_ref();
     if !path.exists() {
         panic!("Path {} does not exist", path.display());
@@ -282,6 +329,11 @@ fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
     // sort the C files to ensure a deterministic build for reproducible builds
     let dir = path.read_dir().unwrap();
     let mut paths = dir.collect::<io::Result<Vec<_>>>().unwrap();
+    paths.retain(|p| {
+        !exclude
+            .iter()
+            .any(|e| p.path().as_path().file_name().unwrap().to_str().unwrap() == e)
+    });
     paths.sort_by_key(|e| e.path());
 
     for e in paths {
