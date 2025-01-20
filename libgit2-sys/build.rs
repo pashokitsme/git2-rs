@@ -7,7 +7,7 @@ use std::process::Command;
 /// Tries to use system libgit2 and emits necessary build script instructions.
 fn try_system_libgit2() -> Result<pkg_config::Library, pkg_config::Error> {
     let mut cfg = pkg_config::Config::new();
-    match cfg.range_version("1.8.1".."1.9.0").probe("libgit2") {
+    match cfg.range_version("1.9.0".."1.10.0").probe("libgit2") {
         Ok(lib) => {
             for include in &lib.include_paths {
                 println!("cargo:root={}", include.display());
@@ -22,6 +22,12 @@ fn try_system_libgit2() -> Result<pkg_config::Library, pkg_config::Error> {
 }
 
 fn main() {
+    println!(
+        "cargo:rustc-check-cfg=cfg(\
+            libgit2_vendored,\
+        )"
+    );
+
     let https = env::var("CARGO_FEATURE_HTTPS").is_ok();
     let ssh = env::var("CARGO_FEATURE_SSH").is_ok();
     let vendored = env::var("CARGO_FEATURE_VENDORED").is_ok();

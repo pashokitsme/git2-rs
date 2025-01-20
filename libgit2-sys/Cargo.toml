@@ -1,6 +1,6 @@
 [package]
 name = "libgit2-sys"
-version = "0.17.0+1.8.1"
+version = "0.18.0+1.9.0"
 authors = ["Josh Triplett <josh@joshtriplett.org>", "Alex Crichton <alex@alexcrichton.com>"]
 links = "git2"
 build = "build.rs"
@@ -37,7 +37,6 @@ openssl-sys = { version = "0.9.45", optional = true }
 [features]
 ssh = ["libssh2-sys"]
 https = ["openssl-sys"]
-ssh_key_from_memory = []
 vendored = []
 vendored-openssl = ["openssl-sys/vendored"]
 zlib-ng-compat = ["libz-sys/zlib-ng", "libssh2-sys?/zlib-ng-compat"]
