@@ -72,12 +72,13 @@
 #![cfg_attr(test, deny(warnings))]
 
 use bitflags::bitflags;
-use libgit2_sys as raw;
 
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::str;
 use std::sync::Once;
+
+pub use libgit2_sys as raw;
 
 pub use crate::apply::{ApplyLocation, ApplyOptions};
 pub use crate::attr::AttrValue;
