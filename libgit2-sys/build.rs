@@ -168,7 +168,7 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
 
     if target.contains("wasm") {
         cfg.include("libgit2/src/libgit2/transports");
-        cfg.file("emscripten-transport/emscriptenhttp.c");
+        cfg.file("emscripten-transport/emscriptenhttp-async.c");
     }
 
     if windows {
