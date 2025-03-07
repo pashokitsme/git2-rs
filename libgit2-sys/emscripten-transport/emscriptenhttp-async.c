@@ -74,6 +74,7 @@ static int emscriptenhttp_stream_read(git_smart_subtransport_stream *stream,
 
   if (read < 0) {
     git_error_set(0, "request aborted by user");
+    s->connectionNo = -1;
     return -1;
   } else {
     *bytes_read = (size_t)read;
