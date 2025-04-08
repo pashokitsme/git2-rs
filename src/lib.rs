@@ -102,7 +102,7 @@ pub use crate::index::{
 pub use crate::indexer::{Indexer, IndexerProgress, Progress};
 pub use crate::mailmap::Mailmap;
 pub use crate::mempack::Mempack;
-pub use crate::merge::{AnnotatedCommit, MergeOptions};
+pub use crate::merge::{AnnotatedCommit, MergeFileOptions, MergeFileResult, MergeOptions};
 pub use crate::message::{
     message_prettify, message_trailers_bytes, message_trailers_strs, MessageTrailersBytes,
     MessageTrailersBytesIterator, MessageTrailersStrs, MessageTrailersStrsIterator,
@@ -1040,6 +1040,8 @@ bitflags! {
         const WT_TYPECHANGE = raw::GIT_STATUS_WT_TYPECHANGE as u32;
         #[allow(missing_docs)]
         const WT_RENAMED = raw::GIT_STATUS_WT_RENAMED as u32;
+        #[allow(missing_docs)]
+        const WT_UNREADABLE = raw::GIT_STATUS_WT_UNREADABLE as u32;
 
         #[allow(missing_docs)]
         const IGNORED = raw::GIT_STATUS_IGNORED as u32;
