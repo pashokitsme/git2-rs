@@ -3390,6 +3390,27 @@ extern "C" {
         opts: *const git_sparse_checkout_options,
     ) -> c_int;
 
+    pub fn git_sparse_checkout_list(
+        patterns: *mut git_strarray,
+        repo: *mut git_repository,
+    ) -> c_int;
+
+    pub fn git_sparse_checkout_set(repo: *mut git_repository, patterns: *mut git_strarray)
+        -> c_int;
+
+    pub fn git_sparse_checkout_add(repo: *mut git_repository, patterns: *mut git_strarray)
+        -> c_int;
+
+    pub fn git_sparse_checkout_reapply(repo: *mut git_repository) -> c_int;
+
+    pub fn git_sparse_checkout_disable(repo: *mut git_repository) -> c_int;
+
+    pub fn git_sparse_check_path(
+        checkout: *mut i32,
+        repo: *mut git_repository,
+        path: *const c_char,
+    ) -> c_int;
+
     // merge
     pub fn git_annotated_commit_id(commit: *const git_annotated_commit) -> *const git_oid;
     pub fn git_annotated_commit_ref(commit: *const git_annotated_commit) -> *const c_char;

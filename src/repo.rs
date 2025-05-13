@@ -2130,6 +2130,79 @@ impl Repository {
         Ok(())
     }
 
+    /// Sparse init
+    pub fn sparse_checkout_init(&self, version: u32) -> Result<(), Error> {
+        let opts = raw::git_sparse_checkout_options { version };
+
+        unsafe {
+            try_call!(raw::git_sparse_checkout_init(self.raw, &opts));
+        }
+        Ok(())
+    }
+
+    /// List the sparse checkout patterns
+    pub fn sparse_checkout_list(&self) -> Result<(), Error> {
+        let mut patterns = raw::git_strarray {
+            strings: ptr::null_mut(),
+            count: 0,
+        };
+
+        unsafe {
+            try_call!(raw::git_sparse_checkout_list(&mut patterns, self.raw));
+        }
+        Ok(())
+    }
+
+    /// Set the sparse checkout patterns
+    pub fn sparse_checkout_set(&self, patterns: &[&str]) -> Result<(), Error> {
+        let mut patterns = patterns
+            .iter()
+            .filter_map(|p| CString::new(*p).ok())
+            .map(|p| p.as_ptr() as *mut _)
+            .collect::<Vec<_>>();
+
+        let mut patterns = raw::git_strarray {
+            strings: patterns.as_mut_ptr(),
+            count: patterns.len(),
+        };
+
+        unsafe {
+            try_call!(raw::git_sparse_checkout_set(self.raw, &mut patterns));
+        }
+
+        Ok(())
+    }
+
+    /// Reapply the sparse checkout rules
+    pub fn sparse_checkout_reapply(&self) -> Result<(), Error> {
+        unsafe {
+            try_call!(raw::git_sparse_checkout_reapply(self.raw));
+        }
+        Ok(())
+    }
+
+    /// Disable the sparse checkout rules
+    pub fn sparse_checkout_disable(&self) -> Result<(), Error> {
+        unsafe {
+            try_call!(raw::git_sparse_checkout_disable(self.raw));
+        }
+        Ok(())
+    }
+
+    /// Check path
+    pub fn sparse_checkout_check_path<P: AsRef<Path>>(
+        &self,
+        path: P,
+        version: &mut i32,
+    ) -> Result<(), Error> {
+        let path = path.as_ref().into_c_string()?;
+
+        unsafe {
+            try_call!(raw::git_sparse_check_path(version, self.raw, path));
+        }
+        Ok(())
+    }
+
     /// Merges the given commit(s) into HEAD, writing the results into the
     /// working directory. Any changes are staged for commit and any conflicts
     /// are written to the index. Callers should inspect the repository's index
