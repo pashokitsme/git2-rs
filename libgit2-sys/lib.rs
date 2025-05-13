@@ -284,6 +284,11 @@ pub struct git_clone_options {
     pub remote_cb_payload: *mut c_void,
 }
 
+#[repr(C)]
+pub struct git_sparse_checkout_options {
+    pub version: c_uint,
+}
+
 git_enum! {
     pub enum git_clone_local_t {
         GIT_CLONE_LOCAL_AUTO,
@@ -3378,6 +3383,12 @@ extern "C" {
         opts: *const git_checkout_options,
     ) -> c_int;
     pub fn git_checkout_init_options(opts: *mut git_checkout_options, version: c_uint) -> c_int;
+
+    // sparse checkout
+    pub fn git_sparse_checkout_init(
+        repo: *mut git_repository,
+        opts: *const git_sparse_checkout_options,
+    ) -> c_int;
 
     // merge
     pub fn git_annotated_commit_id(commit: *const git_annotated_commit) -> *const git_oid;
