@@ -2155,11 +2155,13 @@ impl Repository {
 
     /// Set the sparse checkout patterns
     pub fn sparse_checkout_set(&self, patterns: &[&str]) -> Result<(), Error> {
-        let mut patterns = patterns
+        let c_strings: Vec<CString> = patterns
             .iter()
             .filter_map(|p| CString::new(*p).ok())
-            .map(|p| p.as_ptr() as *mut _)
-            .collect::<Vec<_>>();
+            .collect();
+
+        let mut patterns: Vec<*mut c_char> =
+            c_strings.iter().map(|s| s.as_ptr() as *mut _).collect();
 
         let mut patterns = raw::git_strarray {
             strings: patterns.as_mut_ptr(),
