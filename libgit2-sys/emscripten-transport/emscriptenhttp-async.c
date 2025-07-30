@@ -72,14 +72,19 @@ static int emscriptenhttp_stream_read(git_smart_subtransport_stream *stream,
 
   int read = emscriptenhttp_do_read(s->connectionNo, buffer, buf_size);
 
-  if (read < 0) {
-    git_error_set(0, "request aborted by user");
+  if (read == -999) {
+    git_error_set(0, "request aborted");
     s->connectionNo = -1;
     return -1;
-  } else {
-    *bytes_read = (size_t)read;
   }
 
+  if (read < 0) {
+    git_error_set(0, "failed to read response body, error code: %d", read);
+    s->connectionNo = -1;
+    return -1;
+  }
+
+  *bytes_read = (size_t)read;
   return 0;
 }
 
