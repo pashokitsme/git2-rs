@@ -105,6 +105,12 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
         );
     }
 
+    replace_file_str(
+        "libgit2/src/libgit2/clone.c",
+        "	return clone_repo(out, url, local_path, options, 0);",
+        "	return clone_repo(out, url, local_path, options, 1);",
+    );
+
     // Copy over all header files
     cp_r("libgit2/include", &include);
 
