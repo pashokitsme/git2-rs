@@ -8,7 +8,7 @@ extern crate libz_sys as libz;
 use libc::{c_char, c_int, c_uchar, c_uint, c_ushort, c_void, size_t};
 #[cfg(feature = "ssh")]
 use libssh2_sys as libssh2;
-use std::ffi::CStr;
+use std::ffi::{c_str, CStr};
 
 pub const GIT_OID_RAWSZ: usize = 20;
 pub const GIT_OID_HEXSZ: usize = GIT_OID_RAWSZ * 2;
