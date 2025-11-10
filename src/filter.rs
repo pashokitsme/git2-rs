@@ -1,393 +1,362 @@
+#![allow(missing_docs)]
+
 use std::ffi::CString;
-use std::marker;
+use std::mem;
 use std::path::Path;
-use std::ptr;
 
-use bitflags::bitflags;
-
+use crate::panic;
+use crate::raw;
 use crate::util::Binding;
-use crate::{raw, Blob, Buf, Error, IntoCString, Oid, Repository};
+use crate::Buf;
+use crate::Error;
+use crate::IntoCString;
+use crate::Oid;
 
-/// Filter mode determines the direction of the filter operation.
-///
-/// Filters are applied in one of two directions: smudging - which is
-/// exporting a file from the Git object database to the working directory,
-/// and cleaning - which is importing a file from the working directory to
-/// the Git object database.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub type FilterInitialize<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
+pub type FilterShutdown<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
+pub type FilterCheck<'a> = dyn Fn(Filter<'a>, FilterSource, &str) -> Result<(), Error> + 'a;
+pub type FilterApply<'a> = dyn Fn(Filter<'a>, Buf, Buf, FilterSource) -> Result<(), Error> + 'a;
+pub type FilterStream<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
+pub type FilterCleanup<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u32)]
 pub enum FilterMode {
-    /// Export a file from the Git object database to the working directory
-    ToWorktree = raw::GIT_FILTER_TO_WORKTREE as isize,
-    /// Import a file from the working directory to the Git object database
-    ToOdb = raw::GIT_FILTER_TO_ODB as isize,
+    Smudge = raw::GIT_FILTER_TO_WORKTREE,
+    Clean = raw::GIT_FILTER_TO_ODB,
 }
 
-impl FilterMode {
-    /// Alias for `ToWorktree`
-    pub const SMUDGE: FilterMode = FilterMode::ToWorktree;
-    /// Alias for `ToOdb`
-    pub const CLEAN: FilterMode = FilterMode::ToOdb;
-
-    #[allow(dead_code)]
-    fn from_raw(raw: raw::git_filter_mode_t) -> FilterMode {
-        match raw {
-            raw::GIT_FILTER_TO_WORKTREE => FilterMode::ToWorktree,
-            raw::GIT_FILTER_TO_ODB => FilterMode::ToOdb,
-            _ => FilterMode::ToWorktree,
-        }
-    }
-
-    fn to_raw(self) -> raw::git_filter_mode_t {
-        match self {
-            FilterMode::ToWorktree => raw::GIT_FILTER_TO_WORKTREE,
-            FilterMode::ToOdb => raw::GIT_FILTER_TO_ODB,
-        }
-    }
+pub struct Filter<'f> {
+    inner: *mut FilterRaw<'f>,
 }
 
-bitflags! {
-    /// Filter option flags.
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
-    pub struct FilterFlag: u32 {
-        /// Default filter options
-        const DEFAULT = raw::GIT_FILTER_DEFAULT as u32;
-        /// Don't error for `safecrlf` violations, allow them to continue
-        const ALLOW_UNSAFE = raw::GIT_FILTER_ALLOW_UNSAFE as u32;
-        /// Don't load `/etc/gitattributes` (or the system equivalent)
-        const NO_SYSTEM_ATTRIBUTES = raw::GIT_FILTER_NO_SYSTEM_ATTRIBUTES as u32;
-        /// Load attributes from `.gitattributes` in the root of HEAD
-        const ATTRIBUTES_FROM_HEAD = raw::GIT_FILTER_ATTRIBUTES_FROM_HEAD as u32;
-        /// Load attributes from `.gitattributes` in a given commit
-        const ATTRIBUTES_FROM_COMMIT = raw::GIT_FILTER_ATTRIBUTES_FROM_COMMIT as u32;
-    }
+pub struct FilterSource {
+    raw: *mut raw::git_filter_source,
 }
 
-/// Filtering options
-#[derive(Clone, Debug)]
-pub struct FilterOptions {
-    flags: FilterFlag,
-    attr_commit_id: Option<Oid>,
+#[repr(C)]
+pub struct FilterRaw<'f> {
+    raw: raw::git_filter,
+    initialize: Option<Box<FilterInitialize<'f>>>,
+    shutdown: Option<Box<FilterShutdown<'f>>>,
+    check: Option<Box<FilterCheck<'f>>>,
+    apply: Option<Box<FilterApply<'f>>>,
+    stream: Option<Box<FilterStream<'f>>>,
+    cleanup: Option<Box<FilterCleanup<'f>>>,
 }
 
-impl Default for FilterOptions {
-    fn default() -> Self {
-        FilterOptions {
-            flags: FilterFlag::DEFAULT,
-            attr_commit_id: None,
-        }
-    }
-}
+impl<'f> Filter<'f> {
+    pub fn new() -> Result<Self, Error> {
+        let inner = Box::new(FilterRaw {
+            raw: unsafe { mem::zeroed() },
+            initialize: None,
+            shutdown: None,
+            check: None,
+            apply: None,
+            stream: None,
+            cleanup: None,
+        });
 
-impl FilterOptions {
-    /// Creates a new set of filter options with default values.
-    pub fn new() -> FilterOptions {
-        FilterOptions::default()
-    }
-
-    /// Set filter flags
-    pub fn flags(&mut self, flags: FilterFlag) -> &mut Self {
-        self.flags = flags;
-        self
-    }
-
-    /// Set the commit to load attributes from when `ATTRIBUTES_FROM_COMMIT` is specified
-    pub fn attr_commit_id(&mut self, oid: Option<Oid>) -> &mut Self {
-        self.attr_commit_id = oid;
-        self
-    }
-
-    fn raw(&mut self) -> raw::git_filter_options {
-        let mut opts = raw::git_filter_options {
-            version: raw::GIT_FILTER_OPTIONS_VERSION,
-            flags: self.flags.bits() as raw::git_filter_flag_t,
-            commit_id: ptr::null_mut(),
-            attr_commit_id: ptr::null_mut(),
+        let filter = Self {
+            inner: Box::into_raw(inner),
         };
 
-        if let Some(ref oid) = self.attr_commit_id {
-            opts.attr_commit_id = oid.raw() as *mut _;
+        unsafe {
+            try_call!(raw::git_filter_init(
+                filter.inner as *mut raw::git_filter,
+                raw::GIT_FILTER_VERSION
+            ));
         }
 
-        opts
+        Ok(filter)
     }
 }
 
-/// A list of filters to be applied to a file/blob.
-///
-/// This represents a list of filters to be applied to a file / blob. You
-/// can build the list with one call, apply it with another, and dispose it
-/// with a third. In typical usage, there are not many occasions where a
-/// `FilterList` is needed directly since the library will generally
-/// handle conversions for you, but it can be convenient to be able to
-/// build and apply the list sometimes.
-pub struct FilterList<'repo> {
-    raw: *mut raw::git_filter_list,
-    _marker: marker::PhantomData<&'repo Repository>,
+impl<'f> Filter<'f> {
+    pub fn on_init<F>(&mut self, callback: F) -> &mut Self
+    where
+        F: Fn(Filter<'f>) -> Result<(), Error> + 'f,
+    {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            inner.raw.initialize = Some(on_init);
+            inner.initialize = Some(Box::new(callback) as Box<FilterInitialize<'f>>);
+        }
+        self
+    }
+
+    pub fn on_shutdown<F>(&mut self, callback: F) -> &mut Self
+    where
+        F: Fn(Filter<'f>) -> Result<(), Error> + 'f,
+    {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            inner.raw.shutdown = Some(on_shutdown);
+            inner.shutdown = Some(Box::new(callback) as Box<FilterShutdown<'f>>);
+        }
+        self
+    }
+
+    pub fn on_check<F>(&mut self, callback: F) -> &mut Self
+    where
+        F: Fn(Filter<'f>, FilterSource, &str) -> Result<(), Error> + 'f,
+    {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            inner.raw.check = Some(on_check);
+            inner.check = Some(Box::new(callback) as Box<FilterCheck<'f>>);
+        }
+        self
+    }
+
+    pub fn on_apply<F>(&mut self, callback: F) -> &mut Self
+    where
+        F: Fn(Filter<'f>, Buf, Buf, FilterSource) -> Result<(), Error> + 'f,
+    {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            inner.raw.apply = Some(on_apply);
+            inner.apply = Some(Box::new(callback) as Box<FilterApply<'f>>);
+        }
+        self
+    }
+
+    pub fn on_stream<F>(&mut self, callback: F) -> &mut Self
+    where
+        F: Fn(Filter<'f>) -> Result<(), Error> + 'f,
+    {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            inner.raw.stream = Some(on_stream);
+            inner.stream = Some(Box::new(callback) as Box<FilterStream<'f>>);
+        }
+        self
+    }
+
+    pub fn on_cleanup<F>(&mut self, callback: F) -> &mut Self
+    where
+        F: Fn(Filter<'f>) -> Result<(), Error> + 'f,
+    {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            inner.raw.cleanup = Some(on_cleanup);
+            inner.cleanup = Some(Box::new(callback) as Box<FilterCleanup<'f>>);
+        }
+        self
+    }
+
+    pub fn attributes(&mut self, attrs: &str) -> Result<&mut Self, Error> {
+        if let Some(inner) = unsafe { self.inner.as_mut() } {
+            if !inner.raw.attributes.is_null() {
+                drop(unsafe { CString::from_raw(inner.raw.attributes as *mut i8) });
+            }
+            inner.raw.attributes = attrs.into_c_string()?.into_raw()
+        }
+        Ok(self)
+    }
+
+    pub fn register(self, name: &str, priority: i32) -> Result<(), Error> {
+        unsafe {
+            try_call!(raw::git_filter_register(
+                name.into_c_string()?.into_raw(),
+                self.raw(),
+                priority
+            ));
+        }
+
+        Ok(())
+    }
 }
 
-impl<'repo> FilterList<'repo> {
-    /// Load the filter list for a given path.
-    ///
-    /// This will return `Ok(None)` if no filters are requested for the given file.
-    ///
-    /// # Arguments
-    ///
-    /// * `repo` - Repository object that contains `path`
-    /// * `blob` - The blob to which the filter will be applied (if known), can be `None`
-    /// * `path` - Relative path of the file to be filtered
-    /// * `mode` - Filtering direction (WT->ODB or ODB->WT)
-    /// * `flags` - Combination of filter flags
-    pub fn load(
-        repo: &'repo Repository,
-        blob: Option<&Blob<'repo>>,
-        path: &Path,
-        mode: FilterMode,
-        flags: FilterFlag,
-    ) -> Result<Option<FilterList<'repo>>, Error> {
-        crate::init();
-        let path = path.into_c_string()?;
-        let blob_ptr = blob.map(|b| b.raw()).unwrap_or(ptr::null_mut());
-        let mut filters = ptr::null_mut();
+impl FilterSource {
+    pub fn id(&self) -> Option<Oid> {
         unsafe {
-            try_call!(raw::git_filter_list_load(
-                &mut filters,
-                repo.raw(),
-                blob_ptr,
-                path.as_ptr(),
-                mode.to_raw(),
-                flags.bits()
-            ));
-            if filters.is_null() {
-                Ok(None)
-            } else {
-                Ok(Some(Binding::from_raw(filters)))
+            match call!(raw::git_filter_source_id(self.raw)) {
+                oid_raw if !oid_raw.is_null() => Some(Oid::from_raw(oid_raw)),
+                _ => None,
             }
         }
     }
 
-    /// Load the filter list for a given path with extended options.
-    ///
-    /// This will return `Ok(None)` if no filters are requested for the given file.
-    ///
-    /// # Arguments
-    ///
-    /// * `repo` - Repository object that contains `path`
-    /// * `blob` - The blob to which the filter will be applied (if known), can be `None`
-    /// * `path` - Relative path of the file to be filtered
-    /// * `mode` - Filtering direction (WT->ODB or ODB->WT)
-    /// * `opts` - Filter options
-    pub fn load_ext(
-        repo: &'repo Repository,
-        blob: Option<&Blob<'repo>>,
-        path: &Path,
-        mode: FilterMode,
-        opts: &mut FilterOptions,
-    ) -> Result<Option<FilterList<'repo>>, Error> {
-        crate::init();
-        let path = path.into_c_string()?;
-        let blob_ptr = blob.map(|b| b.raw()).unwrap_or(ptr::null_mut());
-        let mut filters = ptr::null_mut();
-        let mut raw_opts = opts.raw();
+    pub fn mode(&self) -> FilterMode {
         unsafe {
-            try_call!(raw::git_filter_list_load_ext(
-                &mut filters,
-                repo.raw(),
-                blob_ptr,
-                path.as_ptr(),
-                mode.to_raw(),
-                &mut raw_opts
-            ));
-            if filters.is_null() {
-                Ok(None)
-            } else {
-                Ok(Some(Binding::from_raw(filters)))
+            match call!(raw::git_filter_source_mode(self.raw)) {
+                mode => FilterMode::from_raw(mode),
             }
         }
     }
 
-    /// Query the filter list to see if a given filter (by name) will run.
-    ///
-    /// The built-in filters "crlf" and "ident" can be queried, otherwise this
-    /// is the name of the filter specified by the filter attribute.
-    ///
-    /// This will return `false` if the given filter is not in the list, or `true` if
-    /// the filter will be applied.
-    pub fn contains(&self, name: &str) -> bool {
-        let name = match CString::new(name) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        unsafe { raw::git_filter_list_contains(self.raw, name.as_ptr()) == 1 }
+    pub fn path_bytes(&self) -> Option<&[u8]> {
+        static FOO: () = ();
+        let path = unsafe { call!(raw::git_filter_source_path(self.raw)) };
+        unsafe { crate::opt_bytes(&FOO, path) }
     }
 
-    /// Apply filter list to a data buffer.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - Buffer containing the data to filter
-    pub fn apply_to_buffer(&self, input: &[u8]) -> Result<Buf, Error> {
-        crate::init();
-        let out = Buf::new();
+    pub fn path(&self) -> Option<&Path> {
+        self.path_bytes().map(crate::util::bytes2path)
+    }
+
+    pub fn filemode(&self) -> Option<u16> {
         unsafe {
-            try_call!(raw::git_filter_list_apply_to_buffer(
-                out.raw(),
-                self.raw,
-                input.as_ptr() as *const _,
-                input.len()
-            ));
-            Ok(out)
+            match call!(raw::git_filter_source_filemode(self.raw)) {
+                filemode if filemode != 0 => Some(filemode),
+                _ => None,
+            }
         }
-    }
-
-    /// Apply a filter list to the contents of a file on disk.
-    ///
-    /// # Arguments
-    ///
-    /// * `repo` - The repository in which to perform the filtering
-    /// * `path` - The path of the file to filter, a relative path will be taken as relative to the workdir
-    pub fn apply_to_file(&self, repo: &Repository, path: &Path) -> Result<Buf, Error> {
-        crate::init();
-        let path = path.into_c_string()?;
-        let out = Buf::new();
-        unsafe {
-            try_call!(raw::git_filter_list_apply_to_file(
-                out.raw(),
-                self.raw,
-                repo.raw(),
-                path.as_ptr()
-            ));
-            Ok(out)
-        }
-    }
-
-    /// Apply a filter list to the contents of a blob.
-    ///
-    /// # Arguments
-    ///
-    /// * `blob` - The blob to filter
-    pub fn apply_to_blob(&self, blob: &Blob<'repo>) -> Result<Buf, Error> {
-        crate::init();
-        let out = Buf::new();
-        unsafe {
-            try_call!(raw::git_filter_list_apply_to_blob(
-                out.raw(),
-                self.raw,
-                blob.raw()
-            ));
-            Ok(out)
-        }
-    }
-
-    /// Get the number of filters in this list.
-    pub fn len(&self) -> usize {
-        unsafe { raw::git_filter_list_length(self.raw) as usize }
-    }
-
-    /// Check if the filter list is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
-impl<'repo> Binding for FilterList<'repo> {
-    type Raw = *mut raw::git_filter_list;
+impl<'f> Binding for Filter<'f> {
+    type Raw = *mut raw::git_filter;
 
-    unsafe fn from_raw(raw: *mut raw::git_filter_list) -> FilterList<'repo> {
-        FilterList {
-            raw,
-            _marker: marker::PhantomData,
+    unsafe fn from_raw(raw: *mut raw::git_filter) -> Filter<'f> {
+        Filter {
+            inner: raw as *mut FilterRaw<'f>,
         }
     }
 
-    fn raw(&self) -> *mut raw::git_filter_list {
+    fn raw(&self) -> Self::Raw {
+        &self.inner as *const _ as *mut _
+    }
+}
+
+impl Binding for FilterSource {
+    type Raw = *mut raw::git_filter_source;
+
+    unsafe fn from_raw(raw: *mut raw::git_filter_source) -> FilterSource {
+        FilterSource { raw }
+    }
+
+    fn raw(&self) -> *mut raw::git_filter_source {
         self.raw
     }
 }
 
-impl<'repo> Drop for FilterList<'repo> {
-    fn drop(&mut self) {
-        unsafe {
-            raw::git_filter_list_free(self.raw);
+impl Binding for FilterMode {
+    type Raw = raw::git_filter_mode_t;
+
+    unsafe fn from_raw(raw: raw::git_filter_mode_t) -> FilterMode {
+        match raw {
+            raw::GIT_FILTER_TO_WORKTREE => FilterMode::Smudge,
+            raw::GIT_FILTER_TO_ODB => FilterMode::Clean,
+            _ => unreachable!(),
+        }
+    }
+
+    fn raw(&self) -> raw::git_filter_mode_t {
+        match self {
+            FilterMode::Smudge => raw::GIT_FILTER_TO_WORKTREE,
+            FilterMode::Clean => raw::GIT_FILTER_TO_ODB,
         }
     }
 }
 
-// Extension methods for Repository
-impl Repository {
-    /// Load the filter list for a given path.
-    ///
-    /// This will return `Ok(None)` if no filters are requested for the given file.
-    ///
-    /// # Arguments
-    ///
-    /// * `blob` - The blob to which the filter will be applied (if known), can be `None`
-    /// * `path` - Relative path of the file to be filtered
-    /// * `mode` - Filtering direction (WT->ODB or ODB->WT)
-    /// * `flags` - Combination of filter flags
-    pub fn filter_list_load(
-        &self,
-        blob: Option<&Blob<'_>>,
-        path: &Path,
-        mode: FilterMode,
-        flags: FilterFlag,
-    ) -> Result<Option<FilterList<'_>>, Error> {
-        crate::init();
-        let path = path.into_c_string()?;
-        let blob_ptr = blob.map(|b| b.raw()).unwrap_or(ptr::null_mut());
-        let mut filters = ptr::null_mut();
-        unsafe {
-            try_call!(raw::git_filter_list_load(
-                &mut filters,
-                self.raw(),
-                blob_ptr,
-                path.as_ptr(),
-                mode.to_raw(),
-                flags.bits()
-            ));
-            if filters.is_null() {
-                Ok(None)
-            } else {
-                Ok(Some(Binding::from_raw(filters)))
-            }
-        }
-    }
+extern "C" fn on_init(filter: *mut raw::git_filter) -> i32 {
+    let ok = panic::wrap(|| unsafe {
+        let filter = Filter::from_raw(filter);
 
-    /// Load the filter list for a given path with extended options.
-    ///
-    /// This will return `Ok(None)` if no filters are requested for the given file.
-    ///
-    /// # Arguments
-    ///
-    /// * `blob` - The blob to which the filter will be applied (if known), can be `None`
-    /// * `path` - Relative path of the file to be filtered
-    /// * `mode` - Filtering direction (WT->ODB or ODB->WT)
-    /// * `opts` - Filter options
-    pub fn filter_list_load_ext(
-        &self,
-        blob: Option<&Blob<'_>>,
-        path: &Path,
-        mode: FilterMode,
-        opts: &mut FilterOptions,
-    ) -> Result<Option<FilterList<'_>>, Error> {
-        crate::init();
-        let path = path.into_c_string()?;
-        let blob_ptr = blob.map(|b| b.raw()).unwrap_or(ptr::null_mut());
-        let mut filters = ptr::null_mut();
-        let mut raw_opts = opts.raw();
-        unsafe {
-            try_call!(raw::git_filter_list_load_ext(
-                &mut filters,
-                self.raw(),
-                blob_ptr,
-                path.as_ptr(),
-                mode.to_raw(),
-                &mut raw_opts
-            ));
-            if filters.is_null() {
-                Ok(None)
-            } else {
-                Ok(Some(Binding::from_raw(filters)))
-            }
+        if let Some(ref initialize) = (*filter.inner).initialize {
+            initialize(filter).is_ok()
+        } else {
+            true
         }
+    });
+
+    if ok == Some(true) {
+        0
+    } else {
+        -1
+    }
+}
+
+extern "C" fn on_apply(
+    filter: *mut raw::git_filter,
+    _payload: *mut *mut libc::c_void,
+    to: *mut raw::git_buf,
+    from: *const raw::git_buf,
+    src: *const raw::git_filter_source,
+) -> i32 {
+    println!("on_apply");
+    let ok = panic::wrap(|| unsafe {
+        let filter = Filter::from_raw(filter);
+        let to = Buf::from_raw(to);
+        let from = Buf::from_raw(from as *mut _);
+        let src = FilterSource::from_raw(src as *mut _);
+
+        if let Some(ref apply) = (*filter.inner).apply {
+            apply(filter, from, to, src).is_ok()
+        } else {
+            true
+        }
+    });
+
+    if ok == Some(true) {
+        0
+    } else {
+        -1
+    }
+}
+
+extern "C" fn on_cleanup(filter: *mut raw::git_filter, _payload: *mut libc::c_void) {
+    panic::wrap(|| unsafe {
+        let filter = Filter::from_raw(filter);
+
+        if let Some(ref initialize) = (*filter.inner).cleanup {
+            initialize(filter).is_ok()
+        } else {
+            true
+        }
+    });
+}
+
+extern "C" fn on_stream(
+    _streams: *mut *mut raw::git_writestream,
+    _filter: *mut raw::git_filter,
+    _payload: *mut *mut libc::c_void,
+    _src: *const raw::git_filter_source,
+    _next: *mut raw::git_writestream,
+) -> i32 {
+    println!("on_stream");
+    0
+    // return git_filter_buffered_stream_new(out, filter, crlf_apply, NULL, payload, src, next);
+}
+
+extern "C" fn on_check(
+    filter: *mut raw::git_filter,
+    _payload: *mut *mut libc::c_void,
+    src: *const raw::git_filter_source,
+    attr_values: *const *const i8,
+) -> i32 {
+    let ok = panic::wrap(|| unsafe {
+        let filter = Filter::from_raw(filter);
+
+        if let Some(ref check) = (*filter.inner).check {
+            check(
+                filter,
+                FilterSource::from_raw(src as *mut _),
+                str::from_utf8_unchecked(*attr_values.cast()),
+            )
+            .is_ok()
+        } else {
+            true
+        }
+    });
+
+    if ok == Some(true) {
+        0
+    } else {
+        -1
+    }
+}
+
+extern "C" fn on_shutdown(filter: *mut raw::git_filter) -> i32 {
+    let ok = panic::wrap(|| unsafe {
+        let filter = Filter::from_raw(filter);
+
+        if let Some(ref shutdown) = (*filter.inner).shutdown {
+            shutdown(filter).is_ok()
+        } else {
+            true
+        }
+    });
+
+    if ok == Some(true) {
+        0
+    } else {
+        -1
     }
 }

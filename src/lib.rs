@@ -96,7 +96,7 @@ pub use crate::diff::{DiffBinary, DiffBinaryFile, DiffBinaryKind, DiffPatchidOpt
 pub use crate::diff::{DiffFindOptions, DiffHunk, DiffLine, DiffLineType, DiffStats};
 pub use crate::email::{Email, EmailCreateOptions};
 pub use crate::error::Error;
-pub use crate::filter::{FilterFlag, FilterList, FilterMode, FilterOptions};
+pub use crate::filter::{Filter, FilterMode, FilterSource};
 pub use crate::index::{
     Index, IndexConflict, IndexConflicts, IndexEntries, IndexEntry, IndexMatchedPath,
 };
@@ -871,7 +871,7 @@ fn openssl_env_init() {
     // OS X the OpenSSL binaries are stable enough that we can just rely on
     // dynamic linkage (plus they have some weird modifications to OpenSSL which
     // means we wouldn't want to link statically).
-    openssl_probe::init_ssl_cert_env_vars();
+    unsafe { openssl_probe::init_openssl_env_vars() };
 }
 
 #[cfg(not(feature = "vendored-openssl"))]

@@ -2133,13 +2133,6 @@ git_enum! {
     }
 }
 
-pub const GIT_FILTER_CRLF: &[u8] = b"crlf\0";
-pub const GIT_FILTER_IDENT: &[u8] = b"ident\0";
-
-pub const GIT_FILTER_CRLF_PRIORITY: c_int = 0;
-pub const GIT_FILTER_IDENT_PRIORITY: c_int = 100;
-pub const GIT_FILTER_DRIVER_PRIORITY: c_int = 200;
-
 git_enum! {
     pub enum git_filter_flag_t {
         GIT_FILTER_DEFAULT = 0,
@@ -2150,12 +2143,14 @@ git_enum! {
     }
 }
 
+pub const GIT_FILTER_VERSION: c_uint = 1;
+
 #[repr(C)]
 pub struct git_filter_options {
     pub version: c_uint,
     pub flags: git_filter_flag_t,
     pub commit_id: *mut git_oid,
-    pub attr_commit_id: *mut git_oid
+    pub attr_commit_id: *mut git_oid,
 }
 
 pub const GIT_FILTER_OPTIONS_VERSION: c_uint = 1;
@@ -2164,11 +2159,11 @@ pub enum git_filter_list {}
 
 pub enum git_filter_source {}
 
-pub type git_filter_init_fn = Option<extern "C" fn(filter: *mut git_filter) -> c_int>;
+pub type git_filter_init_cb = Option<extern "C" fn(filter: *mut git_filter) -> c_int>;
 
-pub type git_filter_shutdown_fn = Option<extern "C" fn(filter: *mut git_filter) -> c_int>;
+pub type git_filter_shutdown_cb = Option<extern "C" fn(filter: *mut git_filter) -> c_int>;
 
-pub type git_filter_check_fn = Option<
+pub type git_filter_check_cb = Option<
     extern "C" fn(
         filter: *mut git_filter,
         payload: *mut *mut c_void,
@@ -2177,7 +2172,7 @@ pub type git_filter_check_fn = Option<
     ) -> c_int,
 >;
 
-pub type git_filter_apply_fn = Option<
+pub type git_filter_apply_cb = Option<
     extern "C" fn(
         filter: *mut git_filter,
         payload: *mut *mut c_void,
@@ -2187,7 +2182,7 @@ pub type git_filter_apply_fn = Option<
     ) -> c_int,
 >;
 
-pub type git_filter_stream_fn = Option<
+pub type git_filter_stream_cb = Option<
     extern "C" fn(
         out: *mut *mut git_writestream,
         filter: *mut git_filter,
@@ -2197,19 +2192,19 @@ pub type git_filter_stream_fn = Option<
     ) -> c_int,
 >;
 
-pub type git_filter_cleanup_fn =
+pub type git_filter_cleanup_cb =
     Option<extern "C" fn(filter: *mut git_filter, payload: *mut c_void)>;
 
 #[repr(C)]
 pub struct git_filter {
     pub version: c_uint,
     pub attributes: *const c_char,
-    pub initialize: git_filter_init_fn,
-    pub shutdown: git_filter_shutdown_fn,
-    pub check: git_filter_check_fn,
-    pub apply: git_filter_apply_fn,
-    pub stream: git_filter_stream_fn,
-    pub cleanup: git_filter_cleanup_fn,
+    pub initialize: git_filter_init_cb,
+    pub shutdown: git_filter_shutdown_cb,
+    pub check: git_filter_check_cb,
+    pub apply: git_filter_apply_cb,
+    pub stream: git_filter_stream_cb,
+    pub cleanup: git_filter_cleanup_cb,
 }
 
 extern "C" {
@@ -4491,10 +4486,7 @@ extern "C" {
         opts: *mut git_filter_options,
     ) -> c_int;
 
-    pub fn git_filter_list_contains(
-        filters: *mut git_filter_list,
-        name: *const c_char,
-    ) -> c_int;
+    pub fn git_filter_list_contains(filters: *mut git_filter_list, name: *const c_char) -> c_int;
 
     pub fn git_filter_list_apply_to_buffer(
         out: *mut git_buf,
