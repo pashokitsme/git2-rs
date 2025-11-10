@@ -18,6 +18,7 @@ fn main() {
         .header("git2/sys/cred.h")
         .header("git2/sys/email.h")
         .header("git2/sys/filter.h")
+        .header("git2/filter.h")
         .header("git2/cred_helpers.h")
         .type_name(|s, _, _| s.to_string());
     cfg.field_name(|_, f| match f {
