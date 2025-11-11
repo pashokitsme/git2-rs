@@ -14,7 +14,7 @@ use crate::Oid;
 
 pub type FilterInitialize<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 pub type FilterShutdown<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
-pub type FilterCheck<'a> = dyn Fn(Filter<'a>, FilterSource, &str) -> Result<(), Error> + 'a;
+pub type FilterCheck<'a> = dyn Fn(Filter<'a>, FilterSource, Option<&str>) -> Result<(), Error> + 'a;
 pub type FilterApply<'a> = dyn Fn(Filter<'a>, Buf, Buf, FilterSource) -> Result<(), Error> + 'a;
 pub type FilterStream<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 pub type FilterCleanup<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
@@ -97,7 +97,7 @@ impl<'f> Filter<'f> {
 
     pub fn on_check<F>(&mut self, callback: F) -> &mut Self
     where
-        F: Fn(Filter<'f>, FilterSource, &str) -> Result<(), Error> + 'f,
+        F: Fn(Filter<'f>, FilterSource, Option<&str>) -> Result<(), Error> + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.check = Some(on_check);
@@ -153,7 +153,7 @@ impl<'f> Filter<'f> {
         unsafe {
             try_call!(raw::git_filter_register(
                 name.into_c_string()?.into_raw(),
-                self.raw(),
+                self.inner as *mut raw::git_filter,
                 priority
             ));
         }
@@ -161,6 +161,12 @@ impl<'f> Filter<'f> {
         Ok(())
     }
 }
+
+// impl<'f> Drop for Filter<'f> {
+//     fn drop(&mut self) {
+//         println!("Dropping Filter");
+//     }
+// }
 
 impl FilterSource {
     pub fn id(&self) -> Option<Oid> {
@@ -270,7 +276,6 @@ extern "C" fn on_apply(
     from: *const raw::git_buf,
     src: *const raw::git_filter_source,
 ) -> i32 {
-    println!("on_apply");
     let ok = panic::wrap(|| unsafe {
         let filter = Filter::from_raw(filter);
         let to = Buf::from_raw(to);
@@ -325,12 +330,13 @@ extern "C" fn on_check(
         let filter = Filter::from_raw(filter);
 
         if let Some(ref check) = (*filter.inner).check {
-            check(
-                filter,
-                FilterSource::from_raw(src as *mut _),
-                str::from_utf8_unchecked(*attr_values.cast()),
-            )
-            .is_ok()
+            let attrs = if attr_values.is_null() {
+                None
+            } else {
+                str::from_utf8(*attr_values.cast()).ok()
+            };
+
+            check(filter, FilterSource::from_raw(src as *mut _), attrs).is_ok()
         } else {
             true
         }
