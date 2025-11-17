@@ -23,7 +23,7 @@ pub type FilterCleanup<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 
 pub struct FilterBuf {
     raw: *mut raw::git_buf,
-    data: ManuallyDrop<Vec<u8>>,
+    data: Option<ManuallyDrop<Vec<u8>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -77,17 +77,34 @@ impl<'f> Filter<'f> {
     }
 }
 
-impl std::ops::Deref for FilterBuf {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.data
+impl FilterBuf {
+    pub fn as_bytes(&self) -> &[u8] {
+        self.data
+            .as_ref()
+            .map(|data| data.as_slice())
+            .unwrap_or_default()
     }
-}
 
-impl std::ops::DerefMut for FilterBuf {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        &mut self.data
+    pub fn as_allocated_vec(&mut self) -> &mut Vec<u8> {
+        if self.data.is_none() {
+            self.data = Some(ManuallyDrop::new(Vec::new()));
+        }
+
+        self.data.as_mut().unwrap()
+    }
+
+    pub fn sync(&mut self) {
+        if let Some(data) = &self.data {
+            unsafe {
+                (*self.raw).ptr = data.as_ptr() as *mut i8;
+                (*self.raw).size = data.len() as usize;
+                println!(
+                    "filter buf: ptr: {:?}, size: {:?}",
+                    (*self.raw).ptr,
+                    (*self.raw).size
+                );
+            }
+        }
     }
 }
 
@@ -208,27 +225,31 @@ impl FilterSource {
     }
 }
 
+impl Drop for FilterBuf {
+    fn drop(&mut self) {
+        self.sync();
+    }
+}
+
 impl Binding for FilterBuf {
     type Raw = *mut raw::git_buf;
 
     unsafe fn from_raw(raw: *mut raw::git_buf) -> FilterBuf {
-        FilterBuf {
-            raw,
-            data: ManuallyDrop::new(Vec::from_raw_parts(
+        let data = if (*raw).ptr.is_null() {
+            None
+        } else {
+            Some(ManuallyDrop::new(Vec::from_raw_parts(
                 (*raw).ptr as *mut u8,
                 (*raw).size,
                 (*raw).size,
-            )),
-        }
+            )))
+        };
+
+        FilterBuf { raw, data }
     }
 
     fn raw(&self) -> Self::Raw {
-        unsafe {
-            (*self.raw).ptr = self.data.as_ptr() as *mut i8;
-            (*self.raw).size = self.data.len() as usize;
-
-            self.raw
-        }
+        self.raw
     }
 }
 
