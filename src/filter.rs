@@ -2,13 +2,15 @@
 
 use std::ffi::CString;
 use std::mem;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::ptr::null_mut;
+use std::slice;
 
 use crate::panic;
 use crate::raw;
 use crate::util::Binding;
-use crate::Buf;
 use crate::Error;
 use crate::IntoCString;
 use crate::Oid;
@@ -17,8 +19,13 @@ pub type FilterInitialize<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 pub type FilterShutdown<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 pub type FilterCheck<'a> =
     dyn Fn(Filter<'a>, FilterSource, Option<&str>) -> Result<bool, Error> + 'a;
-pub type FilterApply<'a> = dyn Fn(Filter<'a>, Buf, Buf, FilterSource) -> Result<(), Error> + 'a;
+pub type FilterApply<'a> =
+    dyn Fn(Filter<'a>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error> + 'a;
 pub type FilterCleanup<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
+
+pub struct FilterBuf {
+    raw: raw::git_buf,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
@@ -107,7 +114,7 @@ impl<'f> Filter<'f> {
 
     pub fn on_apply<F>(&mut self, callback: F) -> &mut Self
     where
-        F: Fn(Filter<'f>, Buf, Buf, FilterSource) -> Result<(), Error> + 'f,
+        F: Fn(Filter<'f>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error> + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.stream = Some(on_stream);
@@ -188,6 +195,31 @@ impl FilterSource {
     }
 }
 
+impl Deref for FilterBuf {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.raw.ptr as *const u8, self.raw.size as usize) }
+    }
+}
+
+impl DerefMut for FilterBuf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.raw.ptr as *mut u8, self.raw.size as usize) }
+    }
+}
+
+impl Binding for FilterBuf {
+    type Raw = *mut raw::git_buf;
+
+    unsafe fn from_raw(raw: *mut raw::git_buf) -> FilterBuf {
+        FilterBuf { raw: *raw }
+    }
+
+    fn raw(&self) -> *mut raw::git_buf {
+        &self.raw as *const _ as *mut _
+    }
+}
+
 impl<'f> Binding for Filter<'f> {
     type Raw = *mut raw::git_filter;
 
@@ -260,8 +292,8 @@ extern "C" fn on_apply(
 ) -> i32 {
     let ok = panic::wrap(|| unsafe {
         let filter = Filter::from_raw(filter);
-        let to = Buf::from_raw(to);
-        let from = Buf::from_raw(from as *mut _);
+        let to = FilterBuf::from_raw(to);
+        let from = FilterBuf::from_raw(from as *mut _);
         let src = FilterSource::from_raw(src as *mut _);
 
         if let Some(ref apply) = (*filter.inner).apply {
