@@ -2,11 +2,9 @@
 
 use std::ffi::CString;
 use std::mem;
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::ptr::null_mut;
-use std::slice;
 
 use crate::panic;
 use crate::raw;
@@ -24,7 +22,8 @@ pub type FilterApply<'a> =
 pub type FilterCleanup<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 
 pub struct FilterBuf {
-    raw: raw::git_buf,
+    raw: *mut raw::git_buf,
+    data: ManuallyDrop<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -75,6 +74,20 @@ impl<'f> Filter<'f> {
         }
 
         Ok(filter)
+    }
+}
+
+impl std::ops::Deref for FilterBuf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl std::ops::DerefMut for FilterBuf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.data
     }
 }
 
@@ -195,28 +208,27 @@ impl FilterSource {
     }
 }
 
-impl Deref for FilterBuf {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.raw.ptr as *const u8, self.raw.size as usize) }
-    }
-}
-
-impl DerefMut for FilterBuf {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        unsafe { slice::from_raw_parts_mut(self.raw.ptr as *mut u8, self.raw.size as usize) }
-    }
-}
-
 impl Binding for FilterBuf {
     type Raw = *mut raw::git_buf;
 
     unsafe fn from_raw(raw: *mut raw::git_buf) -> FilterBuf {
-        FilterBuf { raw: *raw }
+        FilterBuf {
+            raw,
+            data: ManuallyDrop::new(Vec::from_raw_parts(
+                (*raw).ptr as *mut u8,
+                (*raw).size,
+                (*raw).size,
+            )),
+        }
     }
 
-    fn raw(&self) -> *mut raw::git_buf {
-        &self.raw as *const _ as *mut _
+    fn raw(&self) -> Self::Raw {
+        unsafe {
+            (*self.raw).ptr = self.data.as_ptr() as *mut i8;
+            (*self.raw).size = self.data.len() as usize;
+
+            self.raw
+        }
     }
 }
 
@@ -292,12 +304,14 @@ extern "C" fn on_apply(
 ) -> i32 {
     let ok = panic::wrap(|| unsafe {
         let filter = Filter::from_raw(filter);
+
         let to = FilterBuf::from_raw(to);
         let from = FilterBuf::from_raw(from as *mut _);
+
         let src = FilterSource::from_raw(src as *mut _);
 
         if let Some(ref apply) = (*filter.inner).apply {
-            apply(filter, from, to, src).is_ok()
+            apply(filter, to, from, src).is_ok()
         } else {
             true
         }
