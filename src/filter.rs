@@ -98,11 +98,6 @@ impl FilterBuf {
             unsafe {
                 (*self.raw).ptr = data.as_ptr() as *mut i8;
                 (*self.raw).size = data.len() as usize;
-                println!(
-                    "filter buf: ptr: {:?}, size: {:?}",
-                    (*self.raw).ptr,
-                    (*self.raw).size
-                );
             }
         }
     }
