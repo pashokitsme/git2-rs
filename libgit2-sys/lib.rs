@@ -4544,6 +4544,21 @@ extern "C" {
 
     pub fn git_filter_source_flags(src: *const git_filter_source) -> u32;
 
+    pub fn git_filter_buffered_stream_new(
+        out: *mut *mut git_writestream,
+        filter: *mut git_filter,
+        write_fn: extern "C" fn(
+            *mut git_filter,
+            *mut *mut c_void,
+            *mut git_buf,
+            *const git_buf,
+            *const git_filter_source,
+        ) -> c_int,
+        temp_buf: *mut git_buf,
+        payload: *mut *mut c_void,
+        source: *const git_filter_source,
+        target: *mut git_writestream,
+    ) -> c_int;
 }
 
 pub fn init() {

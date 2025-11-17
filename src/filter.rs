@@ -3,6 +3,7 @@
 use std::ffi::CString;
 use std::mem;
 use std::path::Path;
+use std::ptr::null_mut;
 
 use crate::panic;
 use crate::raw;
@@ -17,7 +18,6 @@ pub type FilterShutdown<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 pub type FilterCheck<'a> =
     dyn Fn(Filter<'a>, FilterSource, Option<&str>) -> Result<bool, Error> + 'a;
 pub type FilterApply<'a> = dyn Fn(Filter<'a>, Buf, Buf, FilterSource) -> Result<(), Error> + 'a;
-pub type FilterStream<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 pub type FilterCleanup<'a> = dyn Fn(Filter<'a>) -> Result<(), Error> + 'a;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,7 +42,6 @@ pub struct FilterRaw<'f> {
     shutdown: Option<Box<FilterShutdown<'f>>>,
     check: Option<Box<FilterCheck<'f>>>,
     apply: Option<Box<FilterApply<'f>>>,
-    stream: Option<Box<FilterStream<'f>>>,
     cleanup: Option<Box<FilterCleanup<'f>>>,
 }
 
@@ -54,7 +53,6 @@ impl<'f> Filter<'f> {
             shutdown: None,
             check: None,
             apply: None,
-            stream: None,
             cleanup: None,
         });
 
@@ -112,19 +110,8 @@ impl<'f> Filter<'f> {
         F: Fn(Filter<'f>, Buf, Buf, FilterSource) -> Result<(), Error> + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
-            inner.raw.apply = Some(on_apply);
-            inner.apply = Some(Box::new(callback) as Box<FilterApply<'f>>);
-        }
-        self
-    }
-
-    pub fn on_stream<F>(&mut self, callback: F) -> &mut Self
-    where
-        F: Fn(Filter<'f>) -> Result<(), Error> + 'f,
-    {
-        if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.stream = Some(on_stream);
-            inner.stream = Some(Box::new(callback) as Box<FilterStream<'f>>);
+            inner.apply = Some(Box::new(callback) as Box<FilterApply<'f>>);
         }
         self
     }
@@ -304,15 +291,23 @@ extern "C" fn on_cleanup(filter: *mut raw::git_filter, _payload: *mut libc::c_vo
 }
 
 extern "C" fn on_stream(
-    _streams: *mut *mut raw::git_writestream,
-    _filter: *mut raw::git_filter,
-    _payload: *mut *mut libc::c_void,
-    _src: *const raw::git_filter_source,
-    _next: *mut raw::git_writestream,
+    out: *mut *mut raw::git_writestream,
+    filter: *mut raw::git_filter,
+    payload: *mut *mut libc::c_void,
+    src: *const raw::git_filter_source,
+    next: *mut raw::git_writestream,
 ) -> i32 {
-    println!("on_stream");
-    0
-    // return git_filter_buffered_stream_new(out, filter, crlf_apply, NULL, payload, src, next);
+    unsafe {
+        call!(raw::git_filter_buffered_stream_new(
+            out,
+            filter,
+            on_apply,
+            null_mut::<raw::git_buf>(),
+            payload,
+            src,
+            next
+        ))
+    }
 }
 
 extern "C" fn on_check(
