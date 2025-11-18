@@ -86,6 +86,10 @@ impl<'f, P> Filter<'f, P> {
             ));
         }
 
+        unsafe {
+            (*filter.inner).raw.cleanup = Some(on_cleanup);
+        }
+
         Ok(filter)
     }
 }
@@ -174,7 +178,6 @@ impl<'f, P> Filter<'f, P> {
         F: Fn(Filter<'f, P>, Option<Box<P>>) -> Result<(), Error> + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
-            inner.raw.cleanup = Some(on_cleanup);
             inner.cleanup = Some(Box::new(callback) as Box<FilterCleanup<'f, P>>);
         }
         self
@@ -190,8 +193,12 @@ impl<'f, P> Filter<'f, P> {
         Ok(self)
     }
 
-    pub fn register(self, name: &str, priority: i32) -> Result<(), Error> {
+    pub fn register(mut self, name: &str, priority: i32) -> Result<(), Error> {
         unsafe {
+            if (*self.inner).cleanup.is_none() {
+                self.on_cleanup(|_, _| Ok(()));
+            }
+
             try_call!(raw::git_filter_register(
                 name.into_c_string()?.into_raw(),
                 self.inner as *mut raw::git_filter,
@@ -266,7 +273,12 @@ impl<P> FilterPayload<P> {
     pub fn replace(&mut self, data: P) {
         _ = self.take();
 
-        self.data = Some(ManuallyDrop::new(Box::new(data)));
+        let ptr = Box::into_raw(Box::new(data));
+
+        self.data = Some(ManuallyDrop::new(unsafe { Box::from_raw(ptr) }));
+        unsafe {
+            *self.raw = ptr as *mut c_void;
+        }
     }
 
     pub fn take(&mut self) -> Option<Box<P>> {
