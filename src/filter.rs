@@ -53,6 +53,8 @@ pub struct FilterRaw<'f> {
 
 impl<'f> Filter<'f> {
     pub fn new() -> Result<Self, Error> {
+        crate::init();
+
         let inner = Box::new(FilterRaw {
             raw: unsafe { mem::zeroed() },
             initialize: None,
