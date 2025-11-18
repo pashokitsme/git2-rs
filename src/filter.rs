@@ -9,6 +9,8 @@ use std::ops::DerefMut;
 use std::path::Path;
 use std::ptr::null_mut;
 
+use libc::c_char;
+
 use crate::panic;
 use crate::raw;
 use crate::util::Binding;
@@ -17,13 +19,47 @@ use crate::IntoCString;
 use crate::Oid;
 use crate::Repository;
 
-pub type FilterInitialize<'a, P> = dyn Fn(Filter<'a, P>) -> Result<(), Error> + 'a;
-pub type FilterShutdown<'a, P> = dyn Fn(Filter<'a, P>) -> Result<(), Error> + 'a;
-pub type FilterCheck<'a, P> =
-    dyn Fn(Filter<'a, P>, FilterPayload<P>, FilterSource, Option<&str>) -> Result<bool, Error> + 'a;
-pub type FilterApply<'a, P> = dyn Fn(Filter<'a, P>, FilterPayload<P>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error>
-    + 'a;
-pub type FilterCleanup<'a, P> = dyn Fn(Filter<'a, P>, Option<Box<P>>) -> Result<(), Error> + 'a;
+trait FilterInitialize<'a> {
+    unsafe fn call(&self, filter: FilterInternal<'a>) -> Result<(), Error>;
+}
+
+trait FilterShutdown<'a> {
+    unsafe fn call(&self, filter: FilterInternal<'a>) -> Result<(), Error>;
+}
+
+trait FilterCheck<'a> {
+    unsafe fn call(
+        &self,
+        filter: FilterInternal<'a>,
+        payload: *mut *mut c_void,
+        src: *const raw::git_filter_source,
+        attr_values: *const *const c_char,
+    ) -> Result<bool, Error>;
+}
+
+trait FilterApply<'a> {
+    unsafe fn call(
+        &self,
+        filter: FilterInternal<'a>,
+        payload: *mut *mut c_void,
+        to: *mut raw::git_buf,
+        from: *const raw::git_buf,
+        src: *const raw::git_filter_source,
+    ) -> Result<(), Error>;
+}
+
+trait FilterCleanup<'a> {
+    unsafe fn call(
+        &self,
+        filter: FilterInternal<'a>,
+        payload: *mut *mut c_void,
+    ) -> Result<(), Error>;
+}
+
+struct FilterCallback<'a, P, F> {
+    callback: F,
+    _phantom: std::marker::PhantomData<&'a P>,
+}
 
 pub struct FilterBuf {
     raw: *mut raw::git_buf,
@@ -43,22 +79,26 @@ pub enum FilterMode {
 }
 
 pub struct Filter<'f, P> {
-    inner: *mut FilterRaw<'f, P>,
-    _phantom: std::marker::PhantomData<P>,
+    inner: *mut FilterRaw<'f>,
+    _phantom: std::marker::PhantomData<&'f P>,
+}
+
+struct FilterInternal<'f> {
+    inner: *mut FilterRaw<'f>,
+}
+
+#[repr(C)]
+pub struct FilterRaw<'f> {
+    raw: raw::git_filter,
+    initialize: Option<Box<dyn FilterInitialize<'f> + 'f>>,
+    shutdown: Option<Box<dyn FilterShutdown<'f> + 'f>>,
+    check: Option<Box<dyn FilterCheck<'f> + 'f>>,
+    apply: Option<Box<dyn FilterApply<'f> + 'f>>,
+    cleanup: Option<Box<dyn FilterCleanup<'f> + 'f>>,
 }
 
 pub struct FilterSource {
     raw: *mut raw::git_filter_source,
-}
-
-#[repr(C)]
-pub struct FilterRaw<'f, P> {
-    raw: raw::git_filter,
-    initialize: Option<Box<FilterInitialize<'f, P>>>,
-    shutdown: Option<Box<FilterShutdown<'f, P>>>,
-    check: Option<Box<FilterCheck<'f, P>>>,
-    apply: Option<Box<FilterApply<'f, P>>>,
-    cleanup: Option<Box<FilterCleanup<'f, P>>>,
 }
 
 impl<'f, P> Filter<'f, P> {
@@ -127,7 +167,7 @@ impl<'f, P> Filter<'f, P> {
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.initialize = Some(on_init);
-            inner.initialize = Some(Box::new(callback) as Box<FilterInitialize<'f, P>>);
+            inner.initialize = Some(Box::new(FilterCallback::<'f, P, F>::new(callback)));
         }
         self
     }
@@ -138,7 +178,7 @@ impl<'f, P> Filter<'f, P> {
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.shutdown = Some(on_shutdown);
-            inner.shutdown = Some(Box::new(callback) as Box<FilterShutdown<'f, P>>);
+            inner.shutdown = Some(Box::new(FilterCallback::<'f, P, F>::new(callback)));
         }
         self
     }
@@ -150,7 +190,7 @@ impl<'f, P> Filter<'f, P> {
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.check = Some(on_check);
-            inner.check = Some(Box::new(callback) as Box<FilterCheck<'f, P>>);
+            inner.check = Some(Box::new(FilterCallback::<'f, P, F>::new(callback)));
         }
         self
     }
@@ -168,7 +208,7 @@ impl<'f, P> Filter<'f, P> {
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
             inner.raw.stream = Some(on_stream);
-            inner.apply = Some(Box::new(callback) as Box<FilterApply<'f, P>>);
+            inner.apply = Some(Box::new(FilterCallback::<'f, P, F>::new(callback)));
         }
         self
     }
@@ -178,7 +218,7 @@ impl<'f, P> Filter<'f, P> {
         F: Fn(Filter<'f, P>, Option<Box<P>>) -> Result<(), Error> + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
-            inner.cleanup = Some(Box::new(callback) as Box<FilterCleanup<'f, P>>);
+            inner.cleanup = Some(Box::new(FilterCallback::<'f, P, F>::new(callback)));
         }
         self
     }
@@ -256,14 +296,14 @@ impl FilterSource {
 }
 
 impl<P> FilterPayload<P> {
-    pub fn data(&self) -> Option<&Box<P>> {
+    pub fn inner(&self) -> Option<&Box<P>> {
         match &self.data {
             Some(data) => Some(&*data.deref()),
             None => None,
         }
     }
 
-    pub fn data_mut(&mut self) -> Option<&mut Box<P>> {
+    pub fn inner_mut(&mut self) -> Option<&mut Box<P>> {
         match &mut self.data {
             Some(data) => Some(&mut *data.deref_mut()),
             None => None,
@@ -293,16 +333,22 @@ impl<P> FilterPayload<P> {
     }
 }
 
+impl<'f> FilterInternal<'f> {
+    fn cast<P>(&self) -> Filter<'f, P> {
+        unsafe { Filter::from_raw(self.inner as *mut raw::git_filter) }
+    }
+}
+
 impl Drop for FilterBuf {
     fn drop(&mut self) {
         self.sync();
     }
 }
 
-impl Binding for FilterPayload<()> {
+impl<P> Binding for FilterPayload<P> {
     type Raw = *mut *mut c_void;
 
-    unsafe fn from_raw(raw: *mut *mut c_void) -> FilterPayload<()> {
+    unsafe fn from_raw(raw: *mut *mut c_void) -> FilterPayload<P> {
         if (*raw).is_null() {
             FilterPayload { data: None, raw }
         } else {
@@ -345,13 +391,25 @@ impl<'f, P> Binding for Filter<'f, P> {
 
     unsafe fn from_raw(raw: *mut raw::git_filter) -> Filter<'f, P> {
         Filter {
-            inner: raw as *mut FilterRaw<'f, P>,
+            inner: raw as *mut FilterRaw<'f>,
             _phantom: std::marker::PhantomData,
         }
     }
 
     fn raw(&self) -> Self::Raw {
         &self.inner as *const _ as *mut _
+    }
+}
+
+impl<'f> Binding for FilterInternal<'f> {
+    type Raw = *mut FilterRaw<'f>;
+
+    unsafe fn from_raw(raw: *mut FilterRaw<'f>) -> FilterInternal<'f> {
+        FilterInternal { inner: raw }
+    }
+
+    fn raw(&self) -> Self::Raw {
+        self.inner
     }
 }
 
@@ -386,12 +444,21 @@ impl Binding for FilterMode {
     }
 }
 
+impl<'a, P, F> FilterCallback<'a, P, F> {
+    fn new(callback: F) -> Self {
+        Self {
+            callback,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
 extern "C" fn on_init(filter: *mut raw::git_filter) -> i32 {
     let ok = panic::wrap(|| unsafe {
-        let filter = Filter::<'_, ()>::from_raw(filter);
+        let filter = FilterInternal::from_raw(filter as *mut _);
 
         if let Some(ref initialize) = (*filter.inner).initialize {
-            initialize(filter).is_ok()
+            initialize.call(filter).is_ok()
         } else {
             true
         }
@@ -401,6 +468,97 @@ extern "C" fn on_init(filter: *mut raw::git_filter) -> i32 {
         0
     } else {
         -1
+    }
+}
+
+impl<'a, P, F> FilterInitialize<'a> for FilterCallback<'a, P, F>
+where
+    F: Fn(Filter<'a, P>) -> Result<(), Error> + 'a,
+{
+    unsafe fn call(&self, filter: FilterInternal<'a>) -> Result<(), Error> {
+        (self.callback)(filter.cast::<P>())
+    }
+}
+
+extern "C" fn on_shutdown(filter: *mut raw::git_filter) -> i32 {
+    let ok = panic::wrap(|| unsafe {
+        let filter = FilterInternal::from_raw(filter as *mut _);
+
+        if let Some(ref shutdown) = (*filter.inner).shutdown {
+            shutdown.call(filter).is_ok()
+        } else {
+            true
+        }
+    });
+
+    if ok == Some(true) {
+        0
+    } else {
+        -1
+    }
+}
+
+impl<'a, P, F> FilterShutdown<'a> for FilterCallback<'a, P, F>
+where
+    F: Fn(Filter<'a, P>) -> Result<(), Error> + 'a,
+{
+    unsafe fn call(&self, filter: FilterInternal<'a>) -> Result<(), Error> {
+        (self.callback)(filter.cast::<P>())
+    }
+}
+
+extern "C" fn on_check(
+    filter: *mut raw::git_filter,
+    payload: *mut *mut libc::c_void,
+    src: *const raw::git_filter_source,
+    attr_values: *const *const i8,
+) -> i32 {
+    let ok = panic::wrap(|| unsafe {
+        let filter = FilterInternal::from_raw(filter as *mut _);
+
+        if let Some(ref check) = (*filter.inner).check {
+            check
+                .call(
+                    filter,
+                    payload,
+                    src as *const raw::git_filter_source,
+                    attr_values,
+                )
+                .ok()
+        } else {
+            Some(false)
+        }
+    })
+    .flatten();
+
+    match ok {
+        Some(true) => 0,
+        Some(false) => raw::GIT_PASSTHROUGH,
+        None => -1,
+    }
+}
+
+impl<'a, P, F> FilterCheck<'a> for FilterCallback<'a, P, F>
+where
+    F: Fn(Filter<'a, P>, FilterPayload<P>, FilterSource, Option<&str>) -> Result<bool, Error> + 'a,
+{
+    unsafe fn call(
+        &self,
+        filter: FilterInternal<'a>,
+        payload: *mut *mut c_void,
+        src: *const raw::git_filter_source,
+        attr_values: *const *const c_char,
+    ) -> Result<bool, Error> {
+        (self.callback)(
+            filter.cast::<P>(),
+            FilterPayload::<P>::from_raw(payload),
+            FilterSource::from_raw(src as *mut _),
+            if attr_values.is_null() {
+                None
+            } else {
+                str::from_utf8(*attr_values.cast()).ok()
+            },
+        )
     }
 }
 
@@ -412,14 +570,10 @@ extern "C" fn on_apply(
     src: *const raw::git_filter_source,
 ) -> i32 {
     let ok = panic::wrap(|| unsafe {
-        let filter = Filter::<'_, ()>::from_raw(filter);
-
-        let to = FilterBuf::from_raw(to);
-        let from = FilterBuf::from_raw(from as *mut _);
-        let src = FilterSource::from_raw(src as *mut _);
+        let filter = FilterInternal::from_raw(filter as *mut _);
 
         if let Some(ref apply) = (*filter.inner).apply {
-            apply(filter, FilterPayload::from_raw(payload), to, from, src).is_ok()
+            apply.call(filter, payload, to, from, src).is_ok()
         } else {
             true
         }
@@ -432,18 +586,56 @@ extern "C" fn on_apply(
     }
 }
 
+impl<'a, P, F> FilterApply<'a> for FilterCallback<'a, P, F>
+where
+    F: Fn(Filter<'a, P>, FilterPayload<P>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error>
+        + 'a,
+{
+    unsafe fn call(
+        &self,
+        filter: FilterInternal<'a>,
+        payload: *mut *mut c_void,
+        to: *mut raw::git_buf,
+        from: *const raw::git_buf,
+        src: *const raw::git_filter_source,
+    ) -> Result<(), Error> {
+        (self.callback)(
+            filter.cast::<P>(),
+            FilterPayload::<P>::from_raw(payload),
+            FilterBuf::from_raw(to),
+            FilterBuf::from_raw(from as *mut _),
+            FilterSource::from_raw(src as *mut _),
+        )
+    }
+}
+
 extern "C" fn on_cleanup(filter: *mut raw::git_filter, mut payload: *mut libc::c_void) {
     panic::wrap(move || unsafe {
-        let filter = Filter::<'_, ()>::from_raw(filter);
-
-        let mut payload = FilterPayload::from_raw(&mut payload as *mut *mut c_void);
-
+        let filter = FilterInternal::from_raw(filter as *mut _);
         if let Some(ref cleanup) = (*filter.inner).cleanup {
-            cleanup(filter, payload.take()).is_ok()
+            cleanup
+                .call(filter, &mut payload as *mut *mut c_void)
+                .is_ok()
         } else {
             true
         }
     });
+}
+
+impl<'a, P, F> FilterCleanup<'a> for FilterCallback<'a, P, F>
+where
+    F: Fn(Filter<'a, P>, Option<Box<P>>) -> Result<(), Error> + 'a,
+{
+    unsafe fn call(
+        &self,
+        filter: FilterInternal<'a>,
+        payload: *mut *mut c_void,
+    ) -> Result<(), Error> {
+        (self.callback)(
+            filter.cast::<P>(),
+            FilterPayload::<P>::from_raw(payload).take(),
+        )
+    }
 }
 
 extern "C" fn on_stream(
@@ -463,61 +655,5 @@ extern "C" fn on_stream(
             src,
             next
         ))
-    }
-}
-
-extern "C" fn on_check(
-    filter: *mut raw::git_filter,
-    payload: *mut *mut libc::c_void,
-    src: *const raw::git_filter_source,
-    attr_values: *const *const i8,
-) -> i32 {
-    let ok = panic::wrap(|| unsafe {
-        let filter = Filter::<'_, ()>::from_raw(filter);
-
-        if let Some(ref check) = (*filter.inner).check {
-            let attrs = if attr_values.is_null() {
-                None
-            } else {
-                str::from_utf8(*attr_values.cast()).ok()
-            };
-
-            let payload = FilterPayload::from_raw(payload);
-
-            check(
-                filter,
-                payload,
-                FilterSource::from_raw(src as *mut _),
-                attrs,
-            )
-            .ok()
-        } else {
-            Some(false)
-        }
-    })
-    .flatten();
-
-    match ok {
-        Some(true) => 0,
-        Some(false) => raw::GIT_PASSTHROUGH,
-        None => -1,
-    }
-}
-
-extern "C" fn on_shutdown(filter: *mut raw::git_filter) -> i32 {
-    let ok = panic::wrap(|| unsafe {
-        let filter = Filter::<'_, ()>::from_raw(filter);
-
-        if let Some(ref shutdown) = (*filter.inner).shutdown {
-            shutdown(filter).is_ok()
-        } else {
-            true
-        }
-    });
-
-    if ok == Some(true) {
-        0
-    } else {
-        -1
     }
 }
