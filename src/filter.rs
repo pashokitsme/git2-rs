@@ -4,6 +4,8 @@ use std::ffi::c_void;
 use std::ffi::CString;
 use std::mem;
 use std::mem::ManuallyDrop;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::ptr::null_mut;
 
@@ -17,15 +19,20 @@ use crate::Repository;
 
 pub type FilterInitialize<'a, P> = dyn Fn(Filter<'a, P>) -> Result<(), Error> + 'a;
 pub type FilterShutdown<'a, P> = dyn Fn(Filter<'a, P>) -> Result<(), Error> + 'a;
-pub type FilterCheck<'a, P> = dyn Fn(Filter<'a, P>, ManuallyDrop<Box<P>>, FilterSource, Option<&str>) -> Result<bool, Error>
-    + 'a;
-pub type FilterApply<'a, P> = dyn Fn(Filter<'a, P>, ManuallyDrop<Box<P>>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error>
+pub type FilterCheck<'a, P> =
+    dyn Fn(Filter<'a, P>, FilterPayload<P>, FilterSource, Option<&str>) -> Result<bool, Error> + 'a;
+pub type FilterApply<'a, P> = dyn Fn(Filter<'a, P>, FilterPayload<P>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error>
     + 'a;
 pub type FilterCleanup<'a, P> = dyn Fn(Filter<'a, P>, Option<Box<P>>) -> Result<(), Error> + 'a;
 
 pub struct FilterBuf {
     raw: *mut raw::git_buf,
     data: Option<ManuallyDrop<Vec<u8>>>,
+}
+
+pub struct FilterPayload<P> {
+    raw: *mut *mut c_void,
+    data: Option<ManuallyDrop<Box<P>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -134,12 +141,7 @@ impl<'f, P> Filter<'f, P> {
 
     pub fn on_check<F>(&mut self, callback: F) -> &mut Self
     where
-        F: Fn(
-                Filter<'f, P>,
-                ManuallyDrop<Box<P>>,
-                FilterSource,
-                Option<&str>,
-            ) -> Result<bool, Error>
+        F: Fn(Filter<'f, P>, FilterPayload<P>, FilterSource, Option<&str>) -> Result<bool, Error>
             + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
@@ -153,7 +155,7 @@ impl<'f, P> Filter<'f, P> {
     where
         F: Fn(
                 Filter<'f, P>,
-                ManuallyDrop<Box<P>>,
+                FilterPayload<P>,
                 FilterBuf,
                 FilterBuf,
                 FilterSource,
@@ -246,9 +248,61 @@ impl FilterSource {
     }
 }
 
+impl<P> FilterPayload<P> {
+    pub fn data(&self) -> Option<&Box<P>> {
+        match &self.data {
+            Some(data) => Some(&*data.deref()),
+            None => None,
+        }
+    }
+
+    pub fn data_mut(&mut self) -> Option<&mut Box<P>> {
+        match &mut self.data {
+            Some(data) => Some(&mut *data.deref_mut()),
+            None => None,
+        }
+    }
+
+    pub fn replace(&mut self, data: P) {
+        _ = self.take();
+
+        self.data = Some(ManuallyDrop::new(Box::new(data)));
+    }
+
+    pub fn take(&mut self) -> Option<Box<P>> {
+        let data = unsafe {
+            match &mut self.data {
+                Some(data) => Some(ManuallyDrop::take(data)),
+                None => None,
+            }
+        };
+
+        data
+    }
+}
+
 impl Drop for FilterBuf {
     fn drop(&mut self) {
         self.sync();
+    }
+}
+
+impl Binding for FilterPayload<()> {
+    type Raw = *mut *mut c_void;
+
+    unsafe fn from_raw(raw: *mut *mut c_void) -> FilterPayload<()> {
+        if (*raw).is_null() {
+            FilterPayload { data: None, raw }
+        } else {
+            FilterPayload {
+                raw,
+                data: Some(ManuallyDrop::new(Box::from_raw(*raw as *mut _))),
+            }
+        }
+    }
+
+    fn raw(&self) -> Self::Raw {
+        self.raw
     }
 }
 
@@ -352,14 +406,8 @@ extern "C" fn on_apply(
         let from = FilterBuf::from_raw(from as *mut _);
         let src = FilterSource::from_raw(src as *mut _);
 
-        if (*payload).is_null() {
-            (*payload) = Box::into_raw(Box::new(())) as *mut c_void;
-        }
-
-        let payload = ManuallyDrop::new(Box::from_raw(*payload as *mut _));
-
         if let Some(ref apply) = (*filter.inner).apply {
-            apply(filter, payload, to, from, src).is_ok()
+            apply(filter, FilterPayload::from_raw(payload), to, from, src).is_ok()
         } else {
             true
         }
@@ -372,18 +420,14 @@ extern "C" fn on_apply(
     }
 }
 
-extern "C" fn on_cleanup(filter: *mut raw::git_filter, payload: *mut libc::c_void) {
-    panic::wrap(|| unsafe {
+extern "C" fn on_cleanup(filter: *mut raw::git_filter, mut payload: *mut libc::c_void) {
+    panic::wrap(move || unsafe {
         let filter = Filter::<'_, ()>::from_raw(filter);
 
-        let payload = if payload.is_null() {
-            None
-        } else {
-            Some(Box::from_raw(payload as *mut _))
-        };
+        let mut payload = FilterPayload::from_raw(&mut payload as *mut *mut c_void);
 
         if let Some(ref cleanup) = (*filter.inner).cleanup {
-            cleanup(filter, payload).is_ok()
+            cleanup(filter, payload.take()).is_ok()
         } else {
             true
         }
@@ -426,11 +470,7 @@ extern "C" fn on_check(
                 str::from_utf8(*attr_values.cast()).ok()
             };
 
-            if (*payload).is_null() {
-                (*payload) = Box::into_raw(Box::new(())) as *mut c_void;
-            }
-
-            let payload = ManuallyDrop::new(Box::from_raw(*payload as *mut _));
+            let payload = FilterPayload::from_raw(payload);
 
             check(
                 filter,
