@@ -71,6 +71,8 @@ pub struct FilterPayload<P> {
     data: Option<ManuallyDrop<Box<P>>>,
 }
 
+pub struct FilterRepository(ManuallyDrop<Repository>);
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum FilterMode {
@@ -99,6 +101,20 @@ pub struct FilterRaw<'f> {
 
 pub struct FilterSource {
     raw: *mut raw::git_filter_source,
+}
+
+impl Deref for FilterRepository {
+    type Target = Repository;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl DerefMut for FilterRepository {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
 }
 
 impl<'f, P> Filter<'f, P> {
@@ -287,10 +303,10 @@ impl FilterSource {
         }
     }
 
-    pub fn repo(&self) -> ManuallyDrop<Repository> {
+    pub fn repo(&self) -> FilterRepository {
         unsafe {
             let repo_ptr = call!(raw::git_filter_source_repo(self.raw));
-            ManuallyDrop::new(Repository::from_raw(repo_ptr))
+            FilterRepository(ManuallyDrop::new(Repository::from_raw(repo_ptr)))
         }
     }
 }
