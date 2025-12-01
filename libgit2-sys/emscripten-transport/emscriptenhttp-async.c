@@ -26,20 +26,17 @@ typedef struct {
 
 } emscriptenhttp_subtransport;
 
-// Asyncified functions wrap async transports for browser when not using a
-// webworker
-
-EM_JS(int, emscriptenhttp_do_get, (const char *url, size_t buf_size), {
-  return Asyncify.handleAsync(async() => {
+EM_JS(int, em_git_http_get, (const char *url, size_t buf_size), {
+  return Asyncify.handleAsync(async() = > {
     const urlString = UTF8ToString(url);
-    return await Module.emscriptenhttpconnect(urlString, buf_size);
+    return await Module.em_git_http_init(urlString, buf_size);
   });
 });
 
-EM_JS(int, emscriptenhttp_do_post, (const char *url, size_t buf_size), {
-  return Asyncify.handleAsync(async() => {
+EM_JS(int, em_git_http_post, (const char *url, size_t buf_size), {
+  return Asyncify.handleAsync(async() = > {
     const urlString = UTF8ToString(url);
-    return await Module.emscriptenhttpconnect(urlString, buf_size, 'POST', {
+    return await Module.em_git_http_init(urlString, buf_size, 'POST', {
       'Content-Type' : urlString.indexOf('git-upload-pack') > 0
           ? 'application/x-git-upload-pack-request'
           : 'application/x-git-receive-pack-request'
@@ -47,16 +44,24 @@ EM_JS(int, emscriptenhttp_do_post, (const char *url, size_t buf_size), {
   });
 });
 
-EM_JS(size_t, emscriptenhttp_do_read,
-      (int connectionNo, char *buffer, size_t buf_size), {
-        return Asyncify.handleAsync(async() => {
-          return await Module.emscriptenhttpread(connectionNo, buffer,
-                                                 buf_size);
-        });
-      });
+EM_JS(size_t, em_http_read, (int connectionNo, char *buffer, size_t buf_size), {
+  return Asyncify.handleAsync(async() = > {
+    return await Module.em_http_read(connectionNo, buffer, buf_size);
+  });
+});
+
+EM_JS(void, em_http_free, (int connectionNo), {
+  return Asyncify.handleAsync(
+      async() = > { return await Module.em_http_free(connectionNo); });
+});
 
 static void emscriptenhttp_stream_free(git_smart_subtransport_stream *stream) {
   emscriptenhttp_stream *s = (emscriptenhttp_stream *)stream;
+
+  if (s->connectionNo > 0) {
+    em_http_free(s->connectionNo);
+    s->connectionNo = -1;
+  }
 
   git__free(s);
 }
@@ -67,10 +72,10 @@ static int emscriptenhttp_stream_read(git_smart_subtransport_stream *stream,
   emscriptenhttp_stream *s = (emscriptenhttp_stream *)stream;
 
   if (s->connectionNo == -1) {
-    s->connectionNo = emscriptenhttp_do_get(s->service_url, DEFAULT_BUFSIZE);
+    s->connectionNo = em_git_http_get(s->service_url, DEFAULT_BUFSIZE);
   }
 
-  int read = emscriptenhttp_do_read(s->connectionNo, buffer, buf_size);
+  int read = em_http_read(s->connectionNo, buffer, buf_size);
 
   if (read == -999) {
     git_error_set(0, "request aborted");
@@ -94,12 +99,12 @@ emscriptenhttp_stream_write_single(git_smart_subtransport_stream *stream,
   emscriptenhttp_stream *s = (emscriptenhttp_stream *)stream;
 
   if (s->connectionNo == -1) {
-    s->connectionNo = emscriptenhttp_do_post(s->service_url, DEFAULT_BUFSIZE);
+    s->connectionNo = em_git_http_post(s->service_url, DEFAULT_BUFSIZE);
   }
 
   EM_ASM(
-      { return Module.emscriptenhttpwrite($0, $1, $2); }, s->connectionNo,
-      buffer, len);
+      { return Module.em_http_write($0, $1, $2); }, s->connectionNo, buffer,
+      len);
 
   return 0;
 }
