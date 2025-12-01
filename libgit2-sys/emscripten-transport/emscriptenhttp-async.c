@@ -27,14 +27,14 @@ typedef struct {
 } emscriptenhttp_subtransport;
 
 EM_JS(int, em_git_http_get, (const char *url, size_t buf_size), {
-  return Asyncify.handleAsync(async() = > {
+  return Asyncify.handleAsync(async () => {
     const urlString = UTF8ToString(url);
     return await Module.em_git_http_init(urlString, buf_size);
   });
 });
 
 EM_JS(int, em_git_http_post, (const char *url, size_t buf_size), {
-  return Asyncify.handleAsync(async() = > {
+  return Asyncify.handleAsync(async () => {
     const urlString = UTF8ToString(url);
     return await Module.em_git_http_init(urlString, buf_size, 'POST', {
       'Content-Type' : urlString.indexOf('git-upload-pack') > 0
@@ -45,14 +45,13 @@ EM_JS(int, em_git_http_post, (const char *url, size_t buf_size), {
 });
 
 EM_JS(size_t, em_http_read, (int connectionNo, char *buffer, size_t buf_size), {
-  return Asyncify.handleAsync(async() = > {
+  return Asyncify.handleAsync(async () => {
     return await Module.em_http_read(connectionNo, buffer, buf_size);
   });
 });
 
 EM_JS(void, em_http_free, (int connectionNo), {
-  return Asyncify.handleAsync(
-      async() = > { return await Module.em_http_free(connectionNo); });
+  return Asyncify.handleAsync(async () => { return await Module.em_http_free(connectionNo); });
 });
 
 static void emscriptenhttp_stream_free(git_smart_subtransport_stream *stream) {
