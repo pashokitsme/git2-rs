@@ -45,7 +45,7 @@ trait FilterApply<'a> {
         to: *mut raw::git_buf,
         from: *const raw::git_buf,
         src: *const raw::git_filter_source,
-    ) -> Result<(), Error>;
+    ) -> Result<bool, Error>;
 }
 
 trait FilterCleanup<'a> {
@@ -219,7 +219,7 @@ impl<'f, P> Filter<'f, P> {
                 FilterBuf,
                 FilterBuf,
                 FilterSource,
-            ) -> Result<(), Error>
+            ) -> Result<bool, Error>
             + 'f,
     {
         if let Some(inner) = unsafe { self.inner.as_mut() } {
@@ -474,16 +474,16 @@ extern "C" fn on_init(filter: *mut raw::git_filter) -> i32 {
         let filter = FilterInternal::from_raw(filter as *mut _);
 
         if let Some(ref initialize) = (*filter.inner).initialize {
-            initialize.call(filter).is_ok()
+            initialize.call(filter)
         } else {
-            true
+            Ok(())
         }
     });
 
-    if ok == Some(true) {
-        0
-    } else {
-        -1
+    match ok {
+        Some(Ok(())) => 0,
+        Some(Err(e)) => e.raw_code(),
+        None => -1,
     }
 }
 
@@ -501,16 +501,16 @@ extern "C" fn on_shutdown(filter: *mut raw::git_filter) -> i32 {
         let filter = FilterInternal::from_raw(filter as *mut _);
 
         if let Some(ref shutdown) = (*filter.inner).shutdown {
-            shutdown.call(filter).is_ok()
+            shutdown.call(filter)
         } else {
-            true
+            Ok(())
         }
     });
 
-    if ok == Some(true) {
-        0
-    } else {
-        -1
+    match ok {
+        Some(Ok(())) => 0,
+        Some(Err(e)) => e.raw_code(),
+        None => -1,
     }
 }
 
@@ -533,23 +533,21 @@ extern "C" fn on_check(
         let filter = FilterInternal::from_raw(filter as *mut _);
 
         if let Some(ref check) = (*filter.inner).check {
-            check
-                .call(
-                    filter,
-                    payload,
-                    src as *const raw::git_filter_source,
-                    attr_values,
-                )
-                .ok()
+            check.call(
+                filter,
+                payload,
+                src as *const raw::git_filter_source,
+                attr_values,
+            )
         } else {
-            Some(false)
+            Ok(false)
         }
-    })
-    .flatten();
+    });
 
     match ok {
-        Some(true) => 0,
-        Some(false) => raw::GIT_PASSTHROUGH,
+        Some(Ok(true)) => 0,
+        Some(Ok(false)) => raw::GIT_PASSTHROUGH,
+        Some(Err(e)) => e.raw_code(),
         None => -1,
     }
 }
@@ -589,22 +587,29 @@ extern "C" fn on_apply(
         let filter = FilterInternal::from_raw(filter as *mut _);
 
         if let Some(ref apply) = (*filter.inner).apply {
-            apply.call(filter, payload, to, from, src).is_ok()
+            apply.call(filter, payload, to, from, src)
         } else {
-            true
+            Ok(true)
         }
     });
 
-    if ok == Some(true) {
-        0
-    } else {
-        -1
+    match ok {
+        Some(Ok(true)) => 0,
+        Some(Ok(false)) => raw::GIT_PASSTHROUGH,
+        Some(Err(e)) => e.raw_code(),
+        None => -1,
     }
 }
 
 impl<'a, P, F> FilterApply<'a> for FilterCallback<'a, P, F>
 where
-    F: Fn(Filter<'a, P>, FilterPayload<P>, FilterBuf, FilterBuf, FilterSource) -> Result<(), Error>
+    F: Fn(
+            Filter<'a, P>,
+            FilterPayload<P>,
+            FilterBuf,
+            FilterBuf,
+            FilterSource,
+        ) -> Result<bool, Error>
         + 'a,
 {
     unsafe fn call(
@@ -614,7 +619,7 @@ where
         to: *mut raw::git_buf,
         from: *const raw::git_buf,
         src: *const raw::git_filter_source,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         (self.callback)(
             filter.cast::<P>(),
             FilterPayload::<P>::from_raw(payload),
