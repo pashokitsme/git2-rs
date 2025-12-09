@@ -17,6 +17,8 @@ fn main() {
         .header("git2/sys/cred.h")
         .header("git2/sys/email.h")
         .header("git2/cred_helpers.h")
+        .header("git2/sys/filter.h")
+        .header("git2/filter.h")
         .type_name(|s, _, _| s.to_string());
     cfg.field_name(|_, f| match f {
         "kind" => "type".to_string(),
@@ -30,6 +32,7 @@ fn main() {
     });
     cfg.skip_signededness(|s| match s {
         s if s.ends_with("_cb") => true,
+        s if s.ends_with("_fn") => true,
         s if s.ends_with("_callback") => true,
         "git_push_transfer_progress" | "git_push_negotiation" | "git_packbuilder_progress" => true,
         _ => false,
@@ -40,6 +43,7 @@ fn main() {
 
     // not entirely sure why this is failing...
     cfg.skip_roundtrip(|t| t == "git_clone_options" || t == "git_submodule_update_options");
+    cfg.skip_fn(|f| f == "git_filter_buffered_stream_new");
 
     cfg.skip_type(|t| t == "__enum_ty");
     cfg.generate("../libgit2-sys/lib.rs", "all.rs");
