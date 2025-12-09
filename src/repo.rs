@@ -2043,8 +2043,10 @@ impl Repository {
         }
     }
 
-    /// iterate over all tags calling `cb` on each.
-    /// the callback is provided the tag id and name
+    /// Iterate over all tags, calling the callback `cb` on each.
+    /// The arguments of `cb` are the tag id and name, in this order.
+    ///
+    /// Returning `false` from `cb` causes the iteration to break early.
     pub fn tag_foreach<T>(&self, cb: T) -> Result<(), Error>
     where
         T: FnMut(Oid, &[u8]) -> bool,
@@ -2065,6 +2067,13 @@ impl Repository {
 
     /// Updates files in the index and the working tree to match the content of
     /// the commit pointed at by HEAD.
+    ///
+    /// Note that this is _not_ the correct mechanism used to switch branches;
+    /// do not change your `HEAD` and then call this method, that would leave
+    /// you with checkout conflicts since your working directory would then
+    /// appear to be dirty.  Instead, checkout the target of the branch and
+    /// then update `HEAD` using [`Repository::set_head`] to point to the
+    /// branch you checked out.
     pub fn checkout_head(&self, opts: Option<&mut CheckoutBuilder<'_>>) -> Result<(), Error> {
         unsafe {
             let mut raw_opts = mem::zeroed();

@@ -65,7 +65,7 @@
 //! source `Repository`, to ensure that they do not outlive the repository
 //! itself.
 
-#![doc(html_root_url = "https://docs.rs/git2/0.20")]
+#![doc(html_root_url = "https://docs.rs/git2/0.21")]
 #![allow(trivial_numeric_casts, trivial_casts)]
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms)]
@@ -89,7 +89,9 @@ pub use crate::buf::Buf;
 pub use crate::cherrypick::CherrypickOptions;
 pub use crate::commit::{Commit, Parents};
 pub use crate::config::{Config, ConfigEntries, ConfigEntry};
-pub use crate::cred::{Cred, CredentialHelper};
+pub use crate::cred::Cred;
+#[cfg(feature = "cred")]
+pub use crate::cred::CredentialHelper;
 pub use crate::describe::{Describe, DescribeFormatOptions, DescribeOptions};
 pub use crate::diff::{Deltas, Diff, DiffDelta, DiffFile, DiffOptions};
 pub use crate::diff::{DiffBinary, DiffBinaryFile, DiffBinaryKind, DiffPatchidOptions};
@@ -142,7 +144,7 @@ pub use crate::tracing::{trace_set, TraceLevel};
 pub use crate::transaction::Transaction;
 pub use crate::tree::{Tree, TreeEntry, TreeIter, TreeWalkMode, TreeWalkResult};
 pub use crate::treebuilder::TreeBuilder;
-pub use crate::util::IntoCString;
+pub use crate::util::{Binding, IntoCString};
 pub use crate::version::Version;
 pub use crate::worktree::{Worktree, WorktreeAddOptions, WorktreeLockStatus, WorktreePruneOptions};
 
@@ -531,9 +533,9 @@ bitflags! {
     /// Flags for APIs that add files matching pathspec
     #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
     pub struct IndexAddOption: u32 {
-        #[allow(missing_docs)]
+        /// Adds files that are not ignored to the index
         const DEFAULT = raw::GIT_INDEX_ADD_DEFAULT as u32;
-        #[allow(missing_docs)]
+        /// Allows adding otherwise ignored files to the index
         const FORCE = raw::GIT_INDEX_ADD_FORCE as u32;
         #[allow(missing_docs)]
         const DISABLE_PATHSPEC_MATCH =

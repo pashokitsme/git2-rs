@@ -4,9 +4,20 @@
 
 libgit2 bindings for Rust.
 
-```toml
-[dependencies]
-git2 = "0.20.2"
+```
+cargo add git2
+```
+
+## Features
+
+By default, git2 includes support for working with local repositories, but does
+not include network support (e.g. cloning remote repositories). If you want to
+use features that require network support, you may need the `"https"` and/or
+`"ssh"` features. If you support user-provided repository URLs, you probably
+want to enable both.
+
+```
+cargo add git2 --features https,ssh
 ```
 
 ## Rust version requirements
@@ -52,7 +63,7 @@ To skip tests on a simple commit or doc-fixes, use `git commit --no-verify`.
 
 ## Building on macOS 10.10+
 
-If the `ssh` feature is enabled (and it is by default) then this library depends
+If the `ssh` feature is enabled then this library depends
 on libssh2 which depends on OpenSSL. To get OpenSSL working follow the
 [`openssl` crate's instructions](https://github.com/sfackler/rust-openssl/blob/master/openssl/src/lib.rs#L31).
 
