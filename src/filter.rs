@@ -76,8 +76,8 @@ pub struct FilterRepository(ManuallyDrop<Repository>);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum FilterMode {
-    Smudge = raw::GIT_FILTER_TO_WORKTREE,
-    Clean = raw::GIT_FILTER_TO_ODB,
+    Smudge = raw::GIT_FILTER_TO_WORKTREE as u32,
+    Clean = raw::GIT_FILTER_TO_ODB as u32,
 }
 
 pub struct Filter<'f, P> {
