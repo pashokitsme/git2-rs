@@ -81,7 +81,9 @@ The build is now aborting. To disable, unset the variable or use `LIBGIT2_NO_VEN
     fs::create_dir_all(&include).unwrap();
 
     if target.contains("wasm") {
-        cfg.flag("-matomics").flag("-mbulk-memory");
+        cfg.flag("-matomics")
+            .flag("-mbulk-memory")
+            .flag("-Wno-error=incompatible-pointer-types");
         replace_file_str(
             "libgit2/src/libgit2/pack.h",
             "GIT_PACK_FILE_MODE 0444",
